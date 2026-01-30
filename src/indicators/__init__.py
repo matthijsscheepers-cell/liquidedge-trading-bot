@@ -60,6 +60,15 @@ from src.indicators.volatility import (
     detect_squeeze,
     calculate_squeeze_duration,
     calculate_historical_volatility,
+    # DataFrame-based convenience functions
+    calculate_atr_df,
+    calculate_atr_percentage,
+    calculate_atr_percentile,
+    calculate_bollinger_bands_df,
+    calculate_bollinger_width,
+    calculate_keltner_channels_df,
+    calculate_keltner_width,
+    add_volatility_indicators,
 )
 
 # TTM Squeeze indicators
@@ -96,6 +105,14 @@ __all__: List[str] = [
     "detect_squeeze",
     "calculate_squeeze_duration",
     "calculate_historical_volatility",
+    "calculate_atr_df",
+    "calculate_atr_percentage",
+    "calculate_atr_percentile",
+    "calculate_bollinger_bands_df",
+    "calculate_bollinger_width",
+    "calculate_keltner_channels_df",
+    "calculate_keltner_width",
+    "add_volatility_indicators",
     # TTM Squeeze
     "calculate_momentum",
     "calculate_ttm_squeeze",
