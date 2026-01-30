@@ -658,3 +658,8 @@ class TestIntegration:
 
         # Should detect at least 2 different regimes across time
         assert len(set(regimes)) >= 1  # At least one regime detected
+
+
+if __name__ == '__main__':
+    import pytest
+    pytest.main([__file__, '-v'])

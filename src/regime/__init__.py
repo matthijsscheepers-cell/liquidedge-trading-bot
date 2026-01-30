@@ -1,51 +1,27 @@
 """
 Market Regime Detection Module
 
-This module implements algorithms to detect and classify market conditions
-into distinct regimes for adaptive trading strategies.
-
-Regime Types:
-    - Trending Bullish: Strong upward trend (ADX > 25, +DI > -DI)
-    - Trending Bearish: Strong downward trend (ADX > 25, -DI > +DI)
-    - Ranging: Sideways movement (ADX < 20)
-    - Volatile: High volatility without clear trend
-    - Squeeze: Low volatility compression (potential breakout)
-
-Detection Methods:
-    - ADX-based trend strength analysis
-    - Volatility measurement (ATR, Bollinger Bands)
-    - TTM Squeeze indicator
-    - Multi-indicator regime classification
+Main class: RegimeDetector - The BRAIN of the trading bot
+Main enum: MarketRegime - Trading regime classifications
 
 Usage:
-    from src.regime import RegimeDetector, RegimeType
+    from src.regime import RegimeDetector, MarketRegime, RegimeConfig
 
     # Initialize detector
     detector = RegimeDetector()
 
-    # Detect regime
-    regime_df = detector.detect(high, low, close)
+    # Add all indicators to your DataFrame
+    df = detector.add_all_indicators(df)
 
-    # Get current regime
-    current = detector.get_current_regime(high, low, close)
-    print(f"Current regime: {current['regime']}")
+    # Get trading decision
+    regime, confidence, strategy = detector.detect_regime(df)
+
+    # Use confidence for position sizing
+    if confidence > 70:
+        position_size = base_size * (confidence / 100)
+        execute_strategy(strategy)
 """
 
-from typing import List
-from src.regime.detector import (
-    RegimeDetector,
-    RegimeType,
-    MarketRegime,
-    TrendStrength,
-    VolatilityState,
-    RegimeConfig,
-)
+from .detector import RegimeDetector, MarketRegime, RegimeConfig
 
-__all__: List[str] = [
-    "RegimeDetector",
-    "RegimeType",
-    "MarketRegime",
-    "TrendStrength",
-    "VolatilityState",
-    "RegimeConfig",
-]
+__all__ = ['RegimeDetector', 'MarketRegime', 'RegimeConfig']
