@@ -1,0 +1,34 @@
+# Core dependencies
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+python-dotenv>=1.0.0
+
+# Technical Analysis
+ta>=0.11.0
+
+# Trading - Capital.com CFD
+# Using Capital.com REST API for CFD trading (unofficial wrapper)
+capitalcom-python>=0.2.3
+requests>=2.31.0
+
+# Backtesting
+backtrader>=1.9.76.123
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.14.0
+
+# Testing
+pytest>=7.3.0
+pytest-cov>=4.1.0
+hypothesis>=6.75.0
+
+# Logging & Monitoring
+loguru>=0.7.0
+
+# Development
+black>=23.3.0
+flake8>=6.0.0
+mypy>=1.3.0
