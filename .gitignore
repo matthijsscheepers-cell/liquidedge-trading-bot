@@ -92,3 +92,6 @@ dmypy.json
 *.bak
 *.backup
 *~
+
+# TODO tracker data
+data/todos.json
