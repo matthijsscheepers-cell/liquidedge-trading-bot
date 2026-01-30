@@ -287,8 +287,254 @@ def calculate_moving_average_cross(
     return bullish_cross, bearish_cross
 
 
+# === DataFrame-based Convenience Functions ===
+
+def calculate_adx_df(
+    df: pd.DataFrame,
+    period: int = 14,
+    high_col: str = 'high',
+    low_col: str = 'low',
+    close_col: str = 'close'
+) -> pd.DataFrame:
+    """
+    Calculate ADX with directional indicators from DataFrame.
+
+    ADX measures trend strength (0-100):
+    - 0-20: No trend / weak trend
+    - 20-40: Strong trend emerging
+    - 40+: Very strong trend
+
+    Args:
+        df: DataFrame with OHLC data
+        period: Lookback period (default 14)
+        high_col: Name of high column
+        low_col: Name of low column
+        close_col: Name of close column
+
+    Returns:
+        DataFrame with columns 'adx', 'plus_di', 'minus_di'
+
+    Raises:
+        KeyError: If required columns don't exist
+
+    Example:
+        >>> df_adx = calculate_adx_df(df, period=14)
+        >>> strong_trend = df_adx['adx'] > 25
+    """
+    # Validate columns exist
+    required = [high_col, low_col, close_col]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise KeyError(f"Missing required columns: {missing}")
+
+    # Calculate ADX using Series-based function
+    adx, plus_di, minus_di = calculate_adx(
+        df[high_col], df[low_col], df[close_col], period=period
+    )
+
+    # Return as DataFrame
+    result = pd.DataFrame({
+        'adx': adx,
+        'plus_di': plus_di,
+        'minus_di': minus_di
+    }, index=df.index)
+
+    return result
+
+
+def calculate_ema_slope(
+    df: pd.DataFrame,
+    ema_period: int,
+    slope_lookback: int = 20,
+    close_col: str = 'close'
+) -> pd.Series:
+    """
+    Calculate slope of EMA (rate of change).
+
+    Positive slope = uptrend
+    Negative slope = downtrend
+
+    Args:
+        df: DataFrame with price data
+        ema_period: Period for EMA calculation
+        slope_lookback: Bars to look back for slope calculation
+        close_col: Name of close column
+
+    Returns:
+        Series with normalized slope (percentage)
+
+    Example:
+        >>> slope = calculate_ema_slope(df, ema_period=20, slope_lookback=20)
+        >>> uptrend = slope > 0.1  # Positive slope > 0.1%
+    """
+    if close_col not in df.columns:
+        raise KeyError(f"Column '{close_col}' not found in DataFrame")
+
+    # Calculate EMA
+    ema = calculate_ema(df[close_col], period=ema_period)
+
+    # Calculate slope as percentage change
+    ema_lookback = ema.shift(slope_lookback)
+    slope = ((ema - ema_lookback) / df[close_col]) * 100
+
+    slope.name = f'ema_{ema_period}_slope'
+    return slope
+
+
+def calculate_multiple_emas(
+    df: pd.DataFrame,
+    periods: list = None,
+    close_col: str = 'close'
+) -> pd.DataFrame:
+    """
+    Calculate multiple EMAs at once.
+
+    Args:
+        df: DataFrame with price data
+        periods: List of periods (default [20, 50, 200])
+        close_col: Name of close column
+
+    Returns:
+        DataFrame with columns 'ema_20', 'ema_50', 'ema_200'
+
+    Example:
+        >>> df_emas = calculate_multiple_emas(df, periods=[20, 50, 200])
+        >>> print(df_emas.columns)
+        Index(['ema_20', 'ema_50', 'ema_200'], dtype='object')
+    """
+    if periods is None:
+        periods = [20, 50, 200]
+
+    if close_col not in df.columns:
+        raise KeyError(f"Column '{close_col}' not found in DataFrame")
+
+    result = pd.DataFrame(index=df.index)
+
+    for period in periods:
+        ema = calculate_ema(df[close_col], period=period)
+        result[f'ema_{period}'] = ema
+
+    return result
+
+
+def check_ema_alignment(
+    df: pd.DataFrame,
+    periods: list = None,
+    close_col: str = 'close'
+) -> pd.Series:
+    """
+    Check if EMAs are aligned (bullish or bearish).
+
+    Bullish alignment: EMA20 > EMA50 > EMA200 (fast above slow)
+    Bearish alignment: EMA20 < EMA50 < EMA200 (fast below slow)
+
+    Args:
+        df: DataFrame with price data
+        periods: List of periods (default [20, 50, 200])
+        close_col: Name of close column
+
+    Returns:
+        Series with values: 'bullish', 'bearish', 'mixed'
+
+    Example:
+        >>> alignment = check_ema_alignment(df, periods=[20, 50, 200])
+        >>> bullish_periods = alignment == 'bullish'
+        >>> print(f"Bullish alignment: {bullish_periods.sum()} bars")
+    """
+    if periods is None:
+        periods = [20, 50, 200]
+
+    if len(periods) < 2:
+        raise ValueError("Need at least 2 periods to check alignment")
+
+    # Calculate EMAs
+    emas = calculate_multiple_emas(df, periods=periods, close_col=close_col)
+
+    # Sort periods to get fast to slow
+    sorted_periods = sorted(periods)
+    ema_cols = [f'ema_{p}' for p in sorted_periods]
+
+    # Initialize alignment series
+    alignment = pd.Series('mixed', index=df.index)
+
+    # Check bullish alignment (fast > slow progressively)
+    bullish = pd.Series(True, index=df.index)
+    for i in range(len(ema_cols) - 1):
+        bullish &= (emas[ema_cols[i]] > emas[ema_cols[i + 1]])
+
+    # Check bearish alignment (fast < slow progressively)
+    bearish = pd.Series(True, index=df.index)
+    for i in range(len(ema_cols) - 1):
+        bearish &= (emas[ema_cols[i]] < emas[ema_cols[i + 1]])
+
+    # Set alignment
+    alignment[bullish] = 'bullish'
+    alignment[bearish] = 'bearish'
+
+    alignment.name = 'ema_alignment'
+    return alignment
+
+
+def add_trend_indicators(
+    df: pd.DataFrame,
+    adx_period: int = 14,
+    ema_periods: list = None,
+    high_col: str = 'high',
+    low_col: str = 'low',
+    close_col: str = 'close'
+) -> pd.DataFrame:
+    """
+    Add all trend indicators to DataFrame in one call.
+
+    This is a convenience function that calculates and adds:
+    - ADX, +DI, -DI
+    - Multiple EMAs (20, 50, 200)
+    - EMA alignment
+
+    Args:
+        df: DataFrame with OHLC data
+        adx_period: Period for ADX calculation
+        ema_periods: List of EMA periods (default [20, 50, 200])
+        high_col: Name of high column
+        low_col: Name of low column
+        close_col: Name of close column
+
+    Returns:
+        DataFrame with original data plus trend indicators
+
+    Example:
+        >>> df = add_trend_indicators(df)
+        >>> print(df.columns)
+        Index(['high', 'low', 'close', 'adx', 'plus_di', 'minus_di',
+               'ema_20', 'ema_50', 'ema_200', 'ema_alignment'], dtype='object')
+    """
+    if ema_periods is None:
+        ema_periods = [20, 50, 200]
+
+    # Create copy to avoid modifying original
+    result = df.copy()
+
+    # Add ADX indicators
+    adx_df = calculate_adx_df(
+        df, period=adx_period,
+        high_col=high_col, low_col=low_col, close_col=close_col
+    )
+    result = pd.concat([result, adx_df], axis=1)
+
+    # Add EMAs
+    emas_df = calculate_multiple_emas(df, periods=ema_periods, close_col=close_col)
+    result = pd.concat([result, emas_df], axis=1)
+
+    # Add EMA alignment
+    alignment = check_ema_alignment(df, periods=ema_periods, close_col=close_col)
+    result['ema_alignment'] = alignment
+
+    return result
+
+
 # Export all functions
 __all__ = [
+    # Series-based functions (used by regime detector)
     'calculate_ema',
     'calculate_sma',
     'calculate_slope',
@@ -296,4 +542,10 @@ __all__ = [
     'calculate_trend_strength',
     'calculate_trend_direction',
     'calculate_moving_average_cross',
+    # DataFrame-based convenience functions
+    'calculate_adx_df',
+    'calculate_ema_slope',
+    'calculate_multiple_emas',
+    'check_ema_alignment',
+    'add_trend_indicators',
 ]

@@ -41,6 +41,12 @@ from src.indicators.trend import (
     calculate_trend_strength,
     calculate_trend_direction,
     calculate_moving_average_cross,
+    # DataFrame-based convenience functions
+    calculate_adx_df,
+    calculate_ema_slope,
+    calculate_multiple_emas,
+    check_ema_alignment,
+    add_trend_indicators,
 )
 
 # Volatility indicators
@@ -75,6 +81,11 @@ __all__: List[str] = [
     "calculate_trend_strength",
     "calculate_trend_direction",
     "calculate_moving_average_cross",
+    "calculate_adx_df",
+    "calculate_ema_slope",
+    "calculate_multiple_emas",
+    "check_ema_alignment",
+    "add_trend_indicators",
     # Volatility
     "calculate_true_range",
     "calculate_atr",

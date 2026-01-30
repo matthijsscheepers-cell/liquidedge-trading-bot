@@ -26,6 +26,12 @@ from src.indicators.trend import (
     calculate_adx,
     calculate_trend_strength,
     calculate_trend_direction,
+    # DataFrame-based functions
+    calculate_adx_df,
+    calculate_ema_slope,
+    calculate_multiple_emas,
+    check_ema_alignment,
+    add_trend_indicators,
 )
 
 from src.indicators.volatility import (
@@ -238,6 +244,167 @@ class TestTrendDirection:
         direction = calculate_trend_direction(plus_di, minus_di, min_difference=5)
 
         assert (direction == 'neutral').all()
+
+
+class TestDataFrameTrendFunctions:
+    """Tests for DataFrame-based trend convenience functions."""
+
+    @pytest.fixture
+    def sample_df(self):
+        """Create sample DataFrame with OHLC data."""
+        np.random.seed(42)
+        n = 100
+        close = pd.Series(np.linspace(100, 120, n) + np.random.normal(0, 2, n))
+        high = close + np.random.uniform(0.5, 2.0, n)
+        low = close - np.random.uniform(0.5, 2.0, n)
+
+        df = pd.DataFrame({
+            'high': high,
+            'low': low,
+            'close': close
+        })
+        return df
+
+    def test_calculate_adx_df(self, sample_df):
+        """Test DataFrame-based ADX calculation."""
+        result = calculate_adx_df(sample_df, period=14)
+
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == len(sample_df)
+        assert 'adx' in result.columns
+        assert 'plus_di' in result.columns
+        assert 'minus_di' in result.columns
+
+        # Check values are in valid range
+        assert (result['adx'] >= 0).all()
+        assert (result['plus_di'] >= 0).all()
+        assert (result['minus_di'] >= 0).all()
+
+    def test_calculate_adx_df_missing_column(self):
+        """Test error when required column missing."""
+        df = pd.DataFrame({'close': [100, 101, 102]})
+
+        with pytest.raises(KeyError):
+            calculate_adx_df(df)
+
+    def test_calculate_ema_slope(self, sample_df):
+        """Test EMA slope calculation."""
+        slope = calculate_ema_slope(sample_df, ema_period=20, slope_lookback=20)
+
+        assert isinstance(slope, pd.Series)
+        assert len(slope) == len(sample_df)
+        assert slope.name == 'ema_20_slope'
+
+        # For uptrending data, average slope should be positive
+        assert slope.mean() > 0
+
+    def test_calculate_multiple_emas(self, sample_df):
+        """Test multiple EMA calculation."""
+        emas = calculate_multiple_emas(sample_df, periods=[20, 50, 200])
+
+        assert isinstance(emas, pd.DataFrame)
+        assert len(emas) == len(sample_df)
+        assert 'ema_20' in emas.columns
+        assert 'ema_50' in emas.columns
+        assert 'ema_200' in emas.columns
+
+    def test_calculate_multiple_emas_custom_periods(self, sample_df):
+        """Test with custom period list."""
+        emas = calculate_multiple_emas(sample_df, periods=[10, 30])
+
+        assert 'ema_10' in emas.columns
+        assert 'ema_30' in emas.columns
+        assert 'ema_20' not in emas.columns
+
+    def test_check_ema_alignment_bullish(self):
+        """Test bullish EMA alignment detection."""
+        # Create data with clear bullish alignment
+        n = 100
+        close = pd.Series(np.linspace(100, 150, n))  # Strong uptrend
+        df = pd.DataFrame({
+            'high': close + 1,
+            'low': close - 1,
+            'close': close
+        })
+
+        alignment = check_ema_alignment(df, periods=[20, 50, 200])
+
+        assert isinstance(alignment, pd.Series)
+        assert alignment.name == 'ema_alignment'
+
+        # In strong uptrend, should have some bullish alignment
+        bullish_count = (alignment == 'bullish').sum()
+        assert bullish_count > 0
+
+    def test_check_ema_alignment_bearish(self):
+        """Test bearish EMA alignment detection."""
+        # Create data with bearish alignment
+        n = 100
+        close = pd.Series(np.linspace(150, 100, n))  # Strong downtrend
+        df = pd.DataFrame({
+            'high': close + 1,
+            'low': close - 1,
+            'close': close
+        })
+
+        alignment = check_ema_alignment(df, periods=[20, 50, 200])
+
+        # In strong downtrend, should have some bearish alignment
+        bearish_count = (alignment == 'bearish').sum()
+        assert bearish_count > 0
+
+    def test_check_ema_alignment_values(self):
+        """Test alignment returns only valid values."""
+        n = 50
+        df = pd.DataFrame({
+            'high': np.linspace(100, 110, n),
+            'low': np.linspace(98, 108, n),
+            'close': np.linspace(99, 109, n)
+        })
+
+        alignment = check_ema_alignment(df, periods=[10, 20])
+
+        # Should only contain these three values
+        valid_values = {'bullish', 'bearish', 'mixed'}
+        assert set(alignment.unique()).issubset(valid_values)
+
+    def test_add_trend_indicators(self, sample_df):
+        """Test adding all trend indicators at once."""
+        result = add_trend_indicators(sample_df)
+
+        # Check original columns preserved
+        assert 'high' in result.columns
+        assert 'low' in result.columns
+        assert 'close' in result.columns
+
+        # Check ADX indicators added
+        assert 'adx' in result.columns
+        assert 'plus_di' in result.columns
+        assert 'minus_di' in result.columns
+
+        # Check EMAs added
+        assert 'ema_20' in result.columns
+        assert 'ema_50' in result.columns
+        assert 'ema_200' in result.columns
+
+        # Check alignment added
+        assert 'ema_alignment' in result.columns
+
+        # Check length preserved
+        assert len(result) == len(sample_df)
+
+    def test_add_trend_indicators_custom_periods(self, sample_df):
+        """Test with custom EMA periods."""
+        result = add_trend_indicators(
+            sample_df,
+            adx_period=20,
+            ema_periods=[10, 30, 60]
+        )
+
+        assert 'ema_10' in result.columns
+        assert 'ema_30' in result.columns
+        assert 'ema_60' in result.columns
+        assert 'ema_20' not in result.columns  # Not in custom list
 
 
 # === Volatility Indicator Tests ===
