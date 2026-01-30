@@ -68,6 +68,40 @@ LIQUIDEDGE/
    # Edit .env with your API credentials
    ```
 
+## Quick Start with Make
+
+This project includes a Makefile for convenient command shortcuts. Run `make help` to see all available commands.
+
+**Common Commands:**
+
+```bash
+# View help
+make help
+
+# TODO Management
+make todos              # List all todos with beautiful formatting
+make todos-week W=4     # View todos for specific week
+make todo-done ID=1     # Mark todo as complete
+make todo-add           # Add new todo interactively
+
+# Utilities
+make instruments        # List available trading instruments
+make test-connection    # Test Capital.com API connection
+make install            # Install all dependencies
+make clean              # Remove cache files
+
+# Testing
+make test               # Run test suite
+make lint               # Run linting checks
+```
+
+**Weekly Planning Workflow:**
+
+Every Friday, check your upcoming tasks:
+```bash
+make todos-week W=<next_week>
+```
+
 ## Broker Setup - Capital.com
 
 ### Why Capital.com?
@@ -211,7 +245,36 @@ Verify your Capital.com connection:
 
 ```bash
 python scripts/hello_world.py
+# or
+make test-connection
 ```
+
+### Task Management
+
+Track your development progress with the built-in TODO tracker:
+
+```bash
+# View all tasks
+make todos
+# or
+./venv/bin/python3 scripts/todo_tracker.py list
+
+# View specific week
+make todos-week W=4
+
+# Mark task complete
+make todo-done ID=1
+
+# Add new task
+make todo-add
+```
+
+The TODO tracker features:
+- Week-based organization (current focus: weeks 3-6)
+- Color-coded priorities (critical, important, nice-to-have)
+- Beautiful rich terminal formatting with tables and panels
+- Time estimates for each task
+- Progress tracking with completion timestamps
 
 ### Backtesting
 
