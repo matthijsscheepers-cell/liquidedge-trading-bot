@@ -35,6 +35,7 @@ from typing import List
 from src.regime.detector import (
     RegimeDetector,
     RegimeType,
+    MarketRegime,
     TrendStrength,
     VolatilityState,
     RegimeConfig,
@@ -43,6 +44,7 @@ from src.regime.detector import (
 __all__: List[str] = [
     "RegimeDetector",
     "RegimeType",
+    "MarketRegime",
     "TrendStrength",
     "VolatilityState",
     "RegimeConfig",
