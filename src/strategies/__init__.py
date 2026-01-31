@@ -1,23 +1,30 @@
 """
-Trading Strategies Module
+Trading strategies.
 
-This module contains various trading strategies that combine indicators,
-regime detection, and risk management for signal generation.
-
-Strategy Types:
-    - Trend Following: Momentum-based strategies
-    - Mean Reversion: Counter-trend strategies
-    - Breakout: Support/resistance breakout strategies
-    - Hybrid: Multi-strategy combinations
-    - Regime-Adaptive: Strategies that adapt to market conditions
-
-Each strategy implements:
-    - Entry/exit logic
-    - Position sizing
-    - Stop-loss and take-profit levels
-    - Signal confidence scoring
+Available strategies:
+- RegimePullbackStrategy: Trend following via pullbacks
+- TTMSqueezeStrategy: Breakout trading on squeeze release
+- StrategySelector: Intelligent routing to appropriate strategy
 """
 
-from typing import List
+from .base import (
+    BaseStrategy,
+    TradeSetup,
+    Position,
+    SignalDirection,
+    ExitAction
+)
+from .regime_pullback import RegimePullbackStrategy
+from .ttm_squeeze import TTMSqueezeStrategy
+from .selector import StrategySelector
 
-__all__: List[str] = []
+__all__ = [
+    'BaseStrategy',
+    'TradeSetup',
+    'Position',
+    'SignalDirection',
+    'ExitAction',
+    'RegimePullbackStrategy',
+    'TTMSqueezeStrategy',
+    'StrategySelector'
+]
