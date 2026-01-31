@@ -1,23 +1,20 @@
 """
-Risk Management Module
+Risk management system.
 
-This module implements comprehensive risk management functionality
-to protect capital and optimize position sizing.
-
-Risk Management Components:
-    - Position Sizing: Kelly Criterion, Fixed Fractional, Volatility-based
-    - Stop-Loss Management: Fixed, Trailing, ATR-based, Time-based
-    - Portfolio Risk: Correlation analysis, Diversification, Exposure limits
-    - Drawdown Control: Maximum drawdown limits, Recovery strategies
-    - Risk-Reward Analysis: R-multiples, Win rate optimization
-
-Risk Parameters:
-    - Maximum risk per trade (% of capital)
-    - Maximum portfolio risk (% of total capital)
-    - Maximum position size limits
-    - Correlation limits between positions
+Components:
+- RiskLimits: Risk profile definitions
+- PositionSizer: Position size calculations
+- RiskGovernor: Main risk management engine
 """
 
-from typing import List
+from .limits import RiskLimits, RiskProfile
+from .position_sizing import PositionSizer
+from .governor import RiskGovernor, TradeRecord
 
-__all__: List[str] = []
+__all__ = [
+    'RiskLimits',
+    'RiskProfile',
+    'PositionSizer',
+    'RiskGovernor',
+    'TradeRecord'
+]
