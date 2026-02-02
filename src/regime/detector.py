@@ -53,6 +53,7 @@ from src.indicators import (
     calculate_ttm_squeeze,
     calculate_squeeze_duration,
     detect_squeeze,
+    calculate_rsi,
 )
 
 
@@ -87,8 +88,8 @@ class RegimeConfig:
     """Configuration for regime detection parameters."""
     # ADX parameters
     adx_period: int = 14
-    adx_strong_threshold: float = 25.0
-    adx_weak_threshold: float = 20.0
+    adx_strong_threshold: float = 10.0  # Intraday 15m: very low threshold
+    adx_weak_threshold: float = 6.0     # Intraday 15m: catch weak trends
 
     # Directional indicator parameters
     di_difference_threshold: float = 5.0
@@ -96,15 +97,15 @@ class RegimeConfig:
     # Volatility parameters
     atr_period: int = 14
     volatility_lookback: int = 50
-    volatility_high_threshold: float = 1.2
-    volatility_low_threshold: float = 0.8
+    volatility_high_threshold: float = 2.5  # Intraday 15m: veel hoger voor natuurlijke intraday volatility
+    volatility_low_threshold: float = 0.6   # Intraday 15m: lager voor squeeze detection
 
     # TTM Squeeze parameters
     bb_period: int = 20
-    bb_std: float = 2.0
+    bb_std: float = 2.5  # Intraday 15m: wider BB for futures volatility
     kc_period: int = 20
     kc_atr_period: int = 20
-    kc_multiplier: float = 1.5
+    kc_multiplier: float = 0.5  # Intraday 15m: much narrower KC for proper squeeze detection
     momentum_period: int = 12
 
     # Regime detection
@@ -461,6 +462,9 @@ class RegimeDetector:
             - ttm_momentum: TTM momentum value
             - momentum_color: Momentum color (green/red)
 
+            Momentum Indicators:
+            - rsi_14: Relative Strength Index (14-period)
+
             Derived Metrics:
             - volatility_ratio: Normalized volatility
             - compression_score: Squeeze compression intensity (0-100)
@@ -630,6 +634,12 @@ class RegimeDetector:
 
         result['compression_score'] = compression_score
 
+        # === Momentum Indicators ===
+
+        # RSI (14-period)
+        rsi = calculate_rsi(close, period=14)
+        result['rsi_14'] = rsi
+
         return result
 
     def detect_regime(
@@ -747,15 +757,18 @@ class RegimeDetector:
 
         Returns:
             True if volatility is too high to trade safely
+
+        Note:
+            Thresholds adjusted for intraday 15m data - more lenient than daily.
         """
-        # ATR in top 15% of historical range
-        atr_extreme = current.get('atr_percentile', 50) > 85
+        # ATR in top 5% of historical range (was 15% - too strict for intraday)
+        atr_extreme = current.get('atr_percentile', 50) > 95
 
-        # BB width in top 10% (extreme expansion)
-        bb_extreme = current.get('bb_width_percentile', 50) > 90
+        # BB width in top 5% (extreme expansion - was 10%)
+        bb_extreme = current.get('bb_width_percentile', 50) > 95
 
-        # Volatility ratio significantly elevated
-        vol_elevated = current.get('volatility_ratio', 1.0) > 1.5
+        # Volatility ratio significantly elevated (was 1.5, now 2.5 for intraday)
+        vol_elevated = current.get('volatility_ratio', 1.0) > 2.5
 
         return atr_extreme or bb_extreme or vol_elevated
 
@@ -901,7 +914,7 @@ class RegimeDetector:
         # === STRONG TREND ===
         if adx > self.config.adx_strong_threshold:
             # Require sustained EMA 200 momentum
-            slope_threshold = 0.015  # 0.015% per bar
+            slope_threshold = 0.0003  # Intraday 15m: very small moves acceptable
 
             if abs(ema_200_slope) > slope_threshold:
                 # Base confidence for strong trend

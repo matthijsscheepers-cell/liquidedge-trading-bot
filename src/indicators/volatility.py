@@ -201,6 +201,61 @@ def calculate_keltner_channels(
     return upper_channel, middle_line, lower_channel
 
 
+def calculate_keltner_channels_pinescript(
+    high: Union[pd.Series, np.ndarray],
+    low: Union[pd.Series, np.ndarray],
+    close: Union[pd.Series, np.ndarray],
+    period: int = 20,
+    multiplier: float = 1.0
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    Calculate Keltner Channels using PineScript/TradingView method.
+
+    This matches the official TTM Squeeze indicator implementation:
+    - Middle Line: SMA of close (not EMA!)
+    - Range: SMA of True Range (not Wilder's ATR!)
+    - Upper Channel: Middle + (multiplier * SMA(TR))
+    - Lower Channel: Middle - (multiplier * SMA(TR))
+
+    Args:
+        high: High prices
+        low: Low prices
+        close: Close prices
+        period: Period for SMA calculation (typically 20)
+        multiplier: Multiplier for True Range SMA (typically 1.0, 1.5, or 2.0)
+
+    Returns:
+        Tuple of (upper_channel, middle_line, lower_channel)
+
+    Example:
+        >>> # Official TTM Squeeze uses 3 levels
+        >>> kc_upper_1, kc_mid, kc_lower_1 = calculate_keltner_channels_pinescript(high, low, close, 20, 1.0)
+        >>> kc_upper_2, _, kc_lower_2 = calculate_keltner_channels_pinescript(high, low, close, 20, 1.5)
+        >>> kc_upper_3, _, kc_lower_3 = calculate_keltner_channels_pinescript(high, low, close, 20, 2.0)
+    """
+    if isinstance(close, np.ndarray):
+        close = pd.Series(close)
+    if isinstance(high, np.ndarray):
+        high = pd.Series(high)
+    if isinstance(low, np.ndarray):
+        low = pd.Series(low)
+
+    # Middle line is SMA of close (PineScript uses SMA, not EMA!)
+    middle_line = close.rolling(window=period).mean()
+
+    # Calculate True Range
+    tr = calculate_true_range(high, low, close)
+
+    # SMA of True Range (PineScript uses simple average, not Wilder's smoothing!)
+    tr_sma = tr.rolling(window=period).mean()
+
+    # Upper and lower channels
+    upper_channel = middle_line + (multiplier * tr_sma)
+    lower_channel = middle_line - (multiplier * tr_sma)
+
+    return upper_channel, middle_line, lower_channel
+
+
 def calculate_volatility_ratio(
     atr: pd.Series,
     close: Union[pd.Series, np.ndarray],

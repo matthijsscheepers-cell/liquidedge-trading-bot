@@ -1,500 +1,627 @@
-"""
-Capital.com API Connector
+import time
+from typing import Dict, List, Optional, Tuple
+from datetime import datetime
+import pandas as pd
+from functools import wraps
 
-This module provides a connector class for interacting with the Capital.com API
-using the unofficial capitalcom-python library.
-
-The CapitalConnector class handles:
-    - Authentication and session management
-    - Account information retrieval
-    - Market data access
-    - Connection state management
-    - Error handling and logging
-
-Security:
-    - Credentials are never logged
-    - Sensitive session data is masked in logs
-    - Automatic disconnect on context manager exit
-
-Example:
-    Basic usage with context manager:
-
-    >>> from src.execution.capital_connector import CapitalConnector
-    >>> from config import settings
-    >>>
-    >>> with CapitalConnector(settings) as connector:
-    ...     if connector.connect():
-    ...         account = connector.get_account_info()
-    ...         print(f"Balance: {account['balance']}")
-
-    Manual connection management:
-
-    >>> connector = CapitalConnector(settings)
-    >>> try:
-    ...     connector.connect()
-    ...     info = connector.get_account_info()
-    ... finally:
-    ...     connector.disconnect()
-"""
-
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
-from loguru import logger
-import capitalcom
-from config.settings import Settings
+from src.execution.broker_interface import (
+    BrokerInterface, OrderResult, AccountInfo, Position
+)
 
 
-class ConnectionError(Exception):
-    """Raised when connection to Capital.com API fails."""
-    pass
-
-
-class APIError(Exception):
-    """Raised when Capital.com API returns an error."""
-    pass
-
-
-class NotConnectedError(Exception):
-    """Raised when attempting operations without an active connection."""
-    pass
-
-
-@dataclass
-class AccountInfo:
+def retry_on_failure(max_attempts=3, delay=2, backoff=2):
     """
-    Account information from Capital.com.
+    Decorator for retry logic with exponential backoff
 
-    Attributes:
-        balance: Current account balance
-        available: Available funds for trading
-        currency: Account currency (e.g., "USD", "EUR")
-        account_type: Type of account ("demo" or "live")
-        account_id: Capital.com account ID
+    Args:
+        max_attempts: Maximum retry attempts
+        delay: Initial delay between retries (seconds)
+        backoff: Backoff multiplier
     """
-    balance: float
-    available: float
-    currency: str
-    account_type: str
-    account_id: str
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            attempt = 0
+            current_delay = delay
+            last_exception = None
+
+            while attempt < max_attempts:
+                try:
+                    return func(self, *args, **kwargs)
+                except Exception as e:
+                    attempt += 1
+                    last_exception = e
+
+                    if attempt >= max_attempts:
+                        self._log_error(f"Failed after {max_attempts} attempts: {e}")
+                        raise
+
+                    self._log_warning(f"Attempt {attempt} failed: {e}. Retrying in {current_delay}s...")
+                    time.sleep(current_delay)
+                    current_delay *= backoff
+
+            raise last_exception
+
+        return wrapper
+    return decorator
 
 
-class CapitalConnector:
+class CapitalConnector(BrokerInterface):
     """
-    Connector for Capital.com API integration.
+    Capital.com broker implementation with robust error handling.
 
-    This class provides a high-level interface to the Capital.com trading API,
-    handling authentication, session management, and common trading operations.
-
-    The connector supports both demo and live trading environments, as configured
-    in the settings.
-
-    Attributes:
-        settings: Application settings containing API credentials
-        client: Capital.com API client instance (None until connected)
-        is_connected: Connection status flag
+    Features:
+    - Automatic retry on failures
+    - Rate limiting
+    - Connection health monitoring
+    - Detailed logging
 
     Example:
-        >>> from config import settings
-        >>> connector = CapitalConnector(settings)
-        >>> if connector.connect():
-        ...     print("Connected to Capital.com")
-        ...     account = connector.get_account_info()
-        ...     connector.disconnect()
+        config = {
+            'api_key': 'xxx',
+            'identifier': 'email@example.com',
+            'password': 'xxx',
+            'environment': 'demo'
+        }
 
-        Using as context manager (recommended):
-        >>> with CapitalConnector(settings) as conn:
-        ...     conn.connect()
-        ...     markets = conn.get_markets(["US_TECH_100"])
+        with CapitalConnector(config) as broker:
+            account = broker.get_account_info()
+            print(f"Balance: {account.balance}")
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, config: dict):
         """
-        Initialize the Capital.com connector.
+        Initialize Capital.com connector
 
         Args:
-            settings: Application settings with Capital.com credentials
-
-        Note:
-            This does not establish a connection. Call connect() to authenticate.
+            config: Dict with api_key, identifier, password, environment
         """
-        self.settings = settings
-        self.client: Optional[capitalcom.Client] = None
-        self._connected: bool = False
-        self._session_info: Optional[Dict[str, Any]] = None
+        super().__init__(config)
 
-        logger.info(
-            f"Initialized Capital.com connector "
-            f"(environment: {settings.capital_environment})"
-        )
+        # API client (will be initialized on connect)
+        self.client = None
 
+        # Rate limiting
+        self.last_request_time = 0
+        self.min_request_interval = 0.5  # 500ms between requests
+
+        # Connection health
+        self.connection_errors = 0
+        self.max_connection_errors = 5
+
+        # Logging
+        self.log_events = []
+
+    @retry_on_failure(max_attempts=1, delay=1)  # Reduced retries since auth errors won't change
     def connect(self) -> bool:
         """
-        Connect to Capital.com API and authenticate.
-
-        Creates a client instance with credentials from settings and attempts
-        to authenticate. The session is stored for subsequent API calls.
+        Connect to Capital.com API
 
         Returns:
-            True if connection successful, False otherwise
-
-        Raises:
-            ConnectionError: If authentication fails
-            APIError: If API returns an error
-
-        Example:
-            >>> connector = CapitalConnector(settings)
-            >>> if connector.connect():
-            ...     print("Successfully connected")
-            ... else:
-            ...     print("Connection failed")
+            True if successful
         """
-        if self._connected:
-            logger.warning("Already connected to Capital.com")
-            return True
-
         try:
-            logger.info(
-                f"Connecting to Capital.com API "
-                f"({self.settings.capital_environment} environment)..."
+            # Import here to avoid import errors if library not installed
+            from capitalcom import Client
+
+            # Initialize client with credentials
+            # Parameters: log (email/login), pas (password), api_key
+            # Note: Client.__init__ automatically attempts login
+            self.client = Client(
+                log=self.config.get('identifier', 'demo@demo.com'),
+                pas=self.config.get('password', 'demo'),
+                api_key=self.config.get('api_key', 'demo')
             )
 
-            # Create client instance
-            # Note: The library uses 'log' (login/email), 'pas' (password), 'api_key'
-            # The Client class is from client_demo module (demo environment)
-            self.client = capitalcom.Client(
-                log=self.settings.capital_identifier,
-                pas=self.settings.capital_password,
-                api_key=self.settings.capital_api_key
-            )
+            # Check if login was successful by verifying cst token exists
+            if not hasattr(self.client, 'cst') or not self.client.cst:
+                # Login failed - check response for error details
+                if hasattr(self.client, 'response'):
+                    status = self.client.response.status_code
+                    error_msg = 'Unknown error'
 
-            # Verify connection by getting session details
-            # Note: Library has typo "get_sesion_details"
-            self._session_info = self.client.get_sesion_details()
+                    try:
+                        error_data = self.client.response.json()
+                        error_msg = error_data.get('errorCode', 'Unknown error')
+                    except:
+                        pass
 
-            if self._session_info:
-                self._connected = True
-                logger.success(
-                    f"✓ Connected to Capital.com "
-                    f"({self.settings.capital_environment} mode)"
-                )
+                    if error_msg == 'error.invalid.details':
+                        raise ConnectionError(
+                            "Authentication failed: Invalid email/identifier or password.\n"
+                            f"Please verify your Capital.com credentials:\n"
+                            f"  - Email/Identifier: {self.config.get('identifier', 'NOT PROVIDED')}\n"
+                            f"  - Password: {'*' * 10}\n"
+                            f"  - API Key: {self.config.get('api_key', 'NOT PROVIDED')[:10]}...\n"
+                            "\nMake sure you're using the correct email address associated with your Capital.com account."
+                        )
+                    elif error_msg == 'error.invalid.api.key':
+                        raise ConnectionError(
+                            "Authentication failed: Invalid API key.\n"
+                            "Please verify your Capital.com API key is correct."
+                        )
+                    else:
+                        raise ConnectionError(f"Authentication failed: {error_msg} (status {status})")
+                else:
+                    raise ConnectionError("Authentication failed: No session token received")
+
+            # Login successful - test by getting accounts
+            accounts = self.client.all_accounts()
+
+            if accounts:
+                self.is_connected = True
+                self.connection_errors = 0
+                self._log_info("✓ Connected to Capital.com successfully")
+
+                # Log account info (safely)
+                if 'accounts' in accounts and accounts['accounts']:
+                    acc = accounts['accounts'][0]
+                    self._log_info(f"  Account ID: {acc.get('accountId', 'N/A')}")
+                    self._log_info(f"  Currency: {acc.get('currency', 'N/A')}")
+                    self._log_info(f"  Balance: {acc.get('balance', 'N/A')}")
+
                 return True
             else:
-                logger.error("Failed to retrieve session details")
-                return False
+                raise ConnectionError("Connected but failed to get account information")
 
+        except ConnectionError:
+            # Re-raise connection errors as-is
+            raise
         except Exception as e:
-            logger.error(f"Failed to connect to Capital.com: {e}")
-            self._connected = False
-            self.client = None
-            raise ConnectionError(f"Connection failed: {str(e)}") from e
+            self.connection_errors += 1
+            self._log_error(f"Connection failed: {e}")
+            raise ConnectionError(f"Failed to connect to Capital.com: {e}")
 
     def disconnect(self) -> None:
-        """
-        Disconnect from Capital.com API.
+        """Disconnect from Capital.com"""
+        if self.client:
+            try:
+                self.client.log_out_account()
+                self._log_info("Disconnected from Capital.com")
+            except:
+                pass
 
-        Logs out from the API and clears the session. Safe to call multiple times.
+        self.is_connected = False
+        self.client = None
 
-        Example:
-            >>> connector = CapitalConnector(settings)
-            >>> connector.connect()
-            >>> # ... do trading operations ...
-            >>> connector.disconnect()
-        """
-        if not self._connected or self.client is None:
-            logger.debug("Not connected, nothing to disconnect")
-            return
+    def _check_rate_limit(self):
+        """Enforce rate limiting"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+
+        if time_since_last < self.min_request_interval:
+            sleep_time = self.min_request_interval - time_since_last
+            time.sleep(sleep_time)
+
+        self.last_request_time = time.time()
+
+    def _check_connection_health(self):
+        """Check if too many errors occurred"""
+        if self.connection_errors >= self.max_connection_errors:
+            raise ConnectionError(
+                f"Too many connection errors ({self.connection_errors}). "
+                "Connection may be unstable."
+            )
+
+    @retry_on_failure(max_attempts=2, delay=1)
+    def get_account_info(self) -> AccountInfo:
+        """Get Capital.com account information"""
+        self._check_rate_limit()
+        self._check_connection_health()
 
         try:
-            logger.info("Disconnecting from Capital.com...")
-            self.client.log_out_account()
-            logger.success("✓ Disconnected from Capital.com")
+            accounts = self.client.all_accounts()
+
+            # Get first account (usually the active one)
+            if accounts and 'accounts' in accounts:
+                info = accounts['accounts'][0] if accounts['accounts'] else {}
+            else:
+                info = accounts if isinstance(accounts, dict) else {}
+
+            # Extract balance - it can be a dict or a float
+            balance_data = info.get('balance', {})
+            if isinstance(balance_data, dict):
+                balance = float(balance_data.get('balance', 0))
+                available = float(balance_data.get('available', 0))
+                deposit = float(balance_data.get('deposit', 0))
+                profit_loss = float(balance_data.get('profitLoss', 0))
+            else:
+                balance = float(balance_data)
+                available = float(info.get('available', balance))
+                deposit = float(info.get('deposit', 0))
+                profit_loss = float(info.get('profitLoss', 0))
+
+            return AccountInfo(
+                balance=balance,
+                equity=available,
+                margin_used=deposit,
+                margin_available=available,
+                unrealized_pnl=profit_loss,
+                currency=info.get('currency', 'USD'),
+                account_id=info.get('accountId', '')
+            )
 
         except Exception as e:
-            logger.warning(f"Error during disconnect: {e}")
+            self.connection_errors += 1
+            self._log_error(f"Failed to get account info: {e}")
+            raise
 
-        finally:
-            self._connected = False
-            self.client = None
-            self._session_info = None
-
-    def get_account_info(self) -> Dict[str, Any]:
-        """
-        Get current account information.
-
-        Retrieves account details including balance, available funds, currency,
-        and account type from the Capital.com API.
-
-        Returns:
-            Dictionary containing:
-                - balance: Current account balance (float)
-                - available: Available funds for trading (float)
-                - currency: Account currency (str)
-                - account_type: "demo" or "live" (str)
-                - account_id: Capital.com account ID (str)
-                - accounts: List of all accounts (list)
-
-        Raises:
-            NotConnectedError: If not connected to API
-            APIError: If API call fails
-
-        Example:
-            >>> info = connector.get_account_info()
-            >>> print(f"Balance: {info['balance']} {info['currency']}")
-            >>> print(f"Available: {info['available']} {info['currency']}")
-        """
-        self._ensure_connected()
+    @retry_on_failure(max_attempts=2, delay=1)
+    def get_current_price(self, asset: str) -> Tuple[float, float]:
+        """Get current bid/ask for asset"""
+        self._check_rate_limit()
 
         try:
-            logger.debug("Fetching account information...")
+            market = self.client.single_market(asset)
 
-            # Get all accounts
-            accounts_data = self.client.all_accounts()
+            # Extract bid/ask from snapshot
+            snapshot = market.get('snapshot', {})
+            bid = float(snapshot.get('bid', 0))
+            ask = float(snapshot.get('offer', 0))  # Capital.com uses 'offer'
 
-            if not accounts_data or 'accounts' not in accounts_data:
-                raise APIError("No account data returned from API")
+            return bid, ask
 
-            accounts = accounts_data['accounts']
+        except Exception as e:
+            self.connection_errors += 1
+            self._log_error(f"Failed to get price for {asset}: {e}")
+            raise
 
-            if not accounts:
-                raise APIError("No accounts found")
+    @retry_on_failure(max_attempts=3, delay=2)
+    def place_market_order(self,
+                          asset: str,
+                          direction: str,
+                          units: float,
+                          stop_loss: Optional[float] = None,
+                          take_profit: Optional[float] = None) -> OrderResult:
+        """
+        Place market order on Capital.com
 
-            # Get the first (primary) account
-            primary_account = accounts[0]
+        Args:
+            asset: Instrument epic (e.g., "US_TECH_100")
+            direction: 'LONG' or 'SHORT'
+            units: Position size
+            stop_loss: Stop loss price
+            take_profit: Take profit price
 
-            # Extract balance info (nested structure)
-            balance_data = primary_account.get('balance', {})
+        Returns:
+            OrderResult with execution details
+        """
+        self._check_rate_limit()
 
-            # Extract account info
-            account_info = {
-                'balance': float(balance_data.get('balance', 0.0)),
-                'available': float(balance_data.get('available', 0.0)),
-                'deposit': float(balance_data.get('deposit', 0.0)),
-                'profit_loss': float(balance_data.get('profitLoss', 0.0)),
-                'currency': primary_account.get('currency', 'USD'),
-                'account_type': self.settings.capital_environment,
-                'account_id': primary_account.get('accountId', ''),
-                'account_name': primary_account.get('accountName', ''),
-                'accounts': accounts  # All accounts for reference
+        try:
+            # Import DirectionType enum
+            from capitalcom.client_demo import DirectionType
+
+            # Capital.com uses DirectionType.BUY/SELL
+            cap_direction = DirectionType.BUY if direction == 'LONG' else DirectionType.SELL
+
+            # Build order parameters
+            kwargs = {
+                'direction': cap_direction,
+                'epic': asset,
+                'size': abs(units),
+                'gsl': False,
+                'tsl': False
             }
 
-            logger.debug(
-                f"Account info retrieved: "
-                f"Balance={account_info['balance']} {account_info['currency']}, "
-                f"Available={account_info['available']}"
-            )
+            # Add stop loss if provided
+            if stop_loss:
+                kwargs['stop_level'] = stop_loss
 
-            return account_info
+            # Add take profit if provided
+            if take_profit:
+                kwargs['profit_level'] = take_profit
 
-        except Exception as e:
-            logger.error(f"Failed to get account info: {e}")
-            raise APIError(f"Failed to retrieve account info: {str(e)}") from e
+            # Execute order
+            response = self.client.place_the_position(**kwargs)
 
-    def get_markets(self, epic_list: List[str]) -> Dict[str, Any]:
-        """
-        Get market information for specified instruments.
+            # Parse response
+            if response and response.get('dealStatus') == 'ACCEPTED':
+                deal_ref = response.get('dealReference')
 
-        Retrieves current market data including prices, status, and trading
-        information for the specified EPICs (instrument identifiers).
+                # Get confirmation (may need short delay)
+                time.sleep(0.5)
+                confirmation = self.client.position_order_confirmation(deal_ref)
 
-        Args:
-            epic_list: List of Capital.com EPIC codes
-                      Examples: ["US_TECH_100", "EUR_USD", "GOLD"]
-
-        Returns:
-            Dictionary mapping EPIC codes to market information:
-                - epic: Instrument identifier
-                - instrumentName: Display name
-                - bid: Current bid price
-                - offer: Current offer price (ask)
-                - high: Day's high price
-                - low: Day's low price
-                - percentageChange: Daily % change
-                - updateTime: Last update timestamp
-                - marketStatus: "TRADEABLE", "CLOSED", etc.
-
-        Raises:
-            NotConnectedError: If not connected to API
-            APIError: If API call fails
-            ValueError: If epic_list is empty
-
-        Example:
-            >>> markets = connector.get_markets(["US_TECH_100", "EUR_USD"])
-            >>> for epic, data in markets.items():
-            ...     print(f"{epic}: Bid={data['bid']}, Ask={data['offer']}")
-        """
-        self._ensure_connected()
-
-        if not epic_list:
-            raise ValueError("epic_list cannot be empty")
-
-        try:
-            logger.debug(f"Fetching market data for {len(epic_list)} instruments...")
-
-            # Build comma-separated EPIC string
-            epics_str = ",".join(epic_list)
-
-            # Call API
-            markets_data = self.client.searching_market(epics=epics_str)
-
-            if not markets_data or 'markets' not in markets_data:
-                raise APIError("No market data returned from API")
-
-            # Parse results into dict keyed by EPIC
-            markets = {}
-            for market in markets_data['markets']:
-                epic = market.get('epic')
-                if epic:
-                    markets[epic] = {
-                        'epic': market.get('epic'),
-                        'instrumentName': market.get('instrumentName'),
-                        'bid': float(market.get('bid', 0.0)),
-                        'offer': float(market.get('offer', 0.0)),
-                        'high': float(market.get('high', 0.0)),
-                        'low': float(market.get('low', 0.0)),
-                        'percentageChange': float(market.get('percentageChange', 0.0)),
-                        'updateTime': market.get('updateTime'),
-                        'marketStatus': market.get('marketStatus'),
-                        'raw': market  # Keep full data for reference
+                return OrderResult(
+                    success=True,
+                    order_id=confirmation.get('dealId'),
+                    fill_price=float(confirmation.get('level', 0)),
+                    filled_units=abs(units),
+                    message="Order filled",
+                    timestamp=datetime.now(),
+                    metadata={
+                        'dealReference': deal_ref,
+                        'direction': direction,
+                        'asset': asset
                     }
-
-            logger.debug(f"Retrieved market data for {len(markets)} instruments")
-
-            return markets
-
-        except Exception as e:
-            logger.error(f"Failed to get market data: {e}")
-            raise APIError(f"Failed to retrieve market data: {str(e)}") from e
-
-    def get_single_market(self, epic: str) -> Dict[str, Any]:
-        """
-        Get detailed information for a single market.
-
-        Retrieves comprehensive market data for a specific instrument,
-        including trading hours, margin requirements, and contract details.
-
-        Args:
-            epic: Capital.com EPIC code (e.g., "US_TECH_100")
-
-        Returns:
-            Dictionary with detailed market information
-
-        Raises:
-            NotConnectedError: If not connected to API
-            APIError: If API call fails
-
-        Example:
-            >>> market = connector.get_single_market("US_TECH_100")
-            >>> print(f"Instrument: {market['instrument']['name']}")
-        """
-        self._ensure_connected()
-
-        try:
-            logger.debug(f"Fetching detailed market data for {epic}...")
-            market_data = self.client.single_market(epic=epic)
-
-            if not market_data:
-                raise APIError(f"No data returned for EPIC: {epic}")
-
-            logger.debug(f"Retrieved detailed market data for {epic}")
-            return market_data
+                )
+            else:
+                return OrderResult(
+                    success=False,
+                    order_id=None,
+                    fill_price=None,
+                    filled_units=0,
+                    message=f"Order rejected: {response.get('reason', 'Unknown')}",
+                    timestamp=datetime.now(),
+                    metadata=response
+                )
 
         except Exception as e:
-            logger.error(f"Failed to get single market data for {epic}: {e}")
-            raise APIError(f"Failed to retrieve market {epic}: {str(e)}") from e
+            self.connection_errors += 1
+            self._log_error(f"Order placement failed: {e}")
 
-    def is_connected(self) -> bool:
-        """
-        Check if currently connected to Capital.com API.
-
-        Returns:
-            True if connected, False otherwise
-
-        Example:
-            >>> if connector.is_connected():
-            ...     print("Ready to trade")
-            ... else:
-            ...     connector.connect()
-        """
-        return self._connected and self.client is not None
-
-    def get_session_info(self) -> Dict[str, Any]:
-        """
-        Get current session information.
-
-        Returns details about the current API session including account details,
-        currency, and session status.
-
-        Returns:
-            Dictionary containing session details
-
-        Raises:
-            NotConnectedError: If not connected to API
-
-        Example:
-            >>> session = connector.get_session_info()
-            >>> print(f"Account: {session.get('accountId')}")
-            >>> print(f"Currency: {session.get('currency')}")
-        """
-        self._ensure_connected()
-
-        if self._session_info is None:
-            logger.warning("Session info not available, fetching...")
-            try:
-                self._session_info = self.client.get_sesion_details()
-            except Exception as e:
-                raise APIError(f"Failed to get session info: {str(e)}") from e
-
-        return self._session_info
-
-    def _ensure_connected(self) -> None:
-        """
-        Ensure connection is active.
-
-        Raises:
-            NotConnectedError: If not connected to API
-        """
-        if not self.is_connected():
-            raise NotConnectedError(
-                "Not connected to Capital.com API. Call connect() first."
+            return OrderResult(
+                success=False,
+                order_id=None,
+                fill_price=None,
+                filled_units=0,
+                message=f"Error: {str(e)}",
+                timestamp=datetime.now(),
+                metadata=None
             )
 
-    def __enter__(self) -> "CapitalConnector":
+    @retry_on_failure(max_attempts=2, delay=1)
+    def modify_position(self,
+                       asset: str,
+                       stop_loss: Optional[float] = None,
+                       take_profit: Optional[float] = None) -> bool:
+        """Modify existing position's stop/target"""
+        self._check_rate_limit()
+
+        try:
+            # Get current position to find deal ID
+            positions_data = self.client.all_positions()
+            positions = positions_data.get('positions', [])
+
+            position = next(
+                (p for p in positions if p.get('market', {}).get('epic') == asset),
+                None
+            )
+
+            if not position:
+                self._log_warning(f"No open position found for {asset}")
+                return False
+
+            deal_id = position.get('dealId')
+
+            # Build update kwargs
+            kwargs = {'dealid': deal_id, 'gsl': False, 'tsl': False}
+
+            if stop_loss is not None:
+                kwargs['stop_level'] = stop_loss
+
+            if take_profit is not None:
+                kwargs['profit_level'] = take_profit
+
+            # Update via API
+            response = self.client.update_the_position(**kwargs)
+
+            return response.get('status') == 'SUCCESS'
+
+        except Exception as e:
+            self._log_error(f"Position modification failed: {e}")
+            return False
+
+    @retry_on_failure(max_attempts=3, delay=1)
+    def close_position(self, asset: str, units: Optional[float] = None) -> OrderResult:
+        """Close position (full or partial)"""
+        self._check_rate_limit()
+
+        try:
+            # Get current position
+            positions_data = self.client.all_positions()
+            positions = positions_data.get('positions', [])
+
+            position = next(
+                (p for p in positions if p.get('market', {}).get('epic') == asset),
+                None
+            )
+
+            if not position:
+                return OrderResult(
+                    success=False,
+                    order_id=None,
+                    fill_price=None,
+                    filled_units=0,
+                    message=f"No position found for {asset}",
+                    timestamp=datetime.now(),
+                    metadata=None
+                )
+
+            deal_id = position.get('dealId')
+
+            # Close the position using deal ID
+            response = self.client.close_position(deal_id)
+
+            if response and response.get('dealStatus') == 'ACCEPTED':
+                deal_ref = response.get('dealReference')
+                time.sleep(0.5)
+                confirmation = self.client.position_order_confirmation(deal_ref)
+
+                return OrderResult(
+                    success=True,
+                    order_id=confirmation.get('dealId'),
+                    fill_price=float(confirmation.get('level', 0)),
+                    filled_units=float(position.get('size', 0)),
+                    message="Position closed",
+                    timestamp=datetime.now(),
+                    metadata=confirmation
+                )
+            else:
+                return OrderResult(
+                    success=False,
+                    order_id=None,
+                    fill_price=None,
+                    filled_units=0,
+                    message=f"Close failed: {response.get('reason')}",
+                    timestamp=datetime.now(),
+                    metadata=response
+                )
+
+        except Exception as e:
+            self._log_error(f"Close position failed: {e}")
+            return OrderResult(
+                success=False,
+                order_id=None,
+                fill_price=None,
+                filled_units=0,
+                message=f"Error: {str(e)}",
+                timestamp=datetime.now(),
+                metadata=None
+            )
+
+    @retry_on_failure(max_attempts=2, delay=1)
+    def get_open_positions(self) -> List[Position]:
+        """Get all open positions"""
+        self._check_rate_limit()
+
+        try:
+            positions_data = self.client.all_positions()
+
+            positions = []
+            for pos in positions_data.get('positions', []):
+                positions.append(Position(
+                    asset=pos.get('market', {}).get('epic', ''),
+                    direction='LONG' if pos.get('direction') == 'BUY' else 'SHORT',
+                    units=float(pos.get('size', 0)),
+                    entry_price=float(pos.get('level', 0)),
+                    current_price=float(pos.get('market', {}).get('bid', 0)),
+                    unrealized_pnl=float(pos.get('profit', 0)),
+                    opened_at=datetime.fromisoformat(pos.get('createdDate', ''))
+                ))
+
+            return positions
+
+        except Exception as e:
+            self._log_error(f"Failed to get positions: {e}")
+            return []
+
+    @retry_on_failure(max_attempts=2, delay=1)
+    def get_historical_data(self,
+                           asset: str,
+                           timeframe: str,
+                           count: int) -> pd.DataFrame:
         """
-        Enter context manager.
-
-        Returns:
-            Self for use in with statement
-
-        Example:
-            >>> with CapitalConnector(settings) as conn:
-            ...     conn.connect()
-            ...     # Use connector
-        """
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """
-        Exit context manager and cleanup.
-
-        Automatically disconnects when exiting the context.
+        Get historical price data
 
         Args:
-            exc_type: Exception type if raised
-            exc_val: Exception value if raised
-            exc_tb: Exception traceback if raised
-        """
-        self.disconnect()
-
-    def __repr__(self) -> str:
-        """
-        String representation of connector.
+            asset: Epic
+            timeframe: '1H', '15m', etc
+            count: Number of bars
 
         Returns:
-            String showing connection status and environment
+            DataFrame with OHLCV
         """
-        status = "connected" if self._connected else "disconnected"
-        return (
-            f"CapitalConnector("
-            f"environment={self.settings.capital_environment}, "
-            f"status={status})"
-        )
+        self._check_rate_limit()
+
+        try:
+            # Import ResolutionType enum
+            from capitalcom.client_demo import ResolutionType
+
+            # Capital.com timeframe mapping to ResolutionType
+            tf_map = {
+                '1m': ResolutionType.MINUTE,
+                '5m': ResolutionType.MINUTE_5,
+                '15m': ResolutionType.MINUTE_15,
+                '1H': ResolutionType.HOUR,
+                '4H': ResolutionType.HOUR_4,
+                '1D': ResolutionType.DAY
+            }
+
+            resolution = tf_map.get(timeframe, ResolutionType.HOUR)
+
+            # Fetch data using historical_price method
+            data = self.client.historical_price(
+                epic=asset,
+                resolution=resolution,
+                max=count
+            )
+
+            # Convert to DataFrame
+            df = pd.DataFrame(data.get('prices', []))
+
+            if df.empty:
+                return pd.DataFrame()
+
+            # Extract prices from bid/ask dictionaries
+            # Capital.com returns prices as {'bid': X, 'ask': Y}
+            # We'll use the mid price (average of bid and ask)
+            if 'openPrice' in df.columns and isinstance(df['openPrice'].iloc[0], dict):
+                df['open'] = df['openPrice'].apply(lambda x: (x['bid'] + x['ask']) / 2 if isinstance(x, dict) else x)
+                df['high'] = df['highPrice'].apply(lambda x: (x['bid'] + x['ask']) / 2 if isinstance(x, dict) else x)
+                df['low'] = df['lowPrice'].apply(lambda x: (x['bid'] + x['ask']) / 2 if isinstance(x, dict) else x)
+                df['close'] = df['closePrice'].apply(lambda x: (x['bid'] + x['ask']) / 2 if isinstance(x, dict) else x)
+                df['volume'] = df['lastTradedVolume']
+            else:
+                # Fallback for non-dict format
+                df = df.rename(columns={
+                    'openPrice': 'open',
+                    'highPrice': 'high',
+                    'lowPrice': 'low',
+                    'closePrice': 'close',
+                    'lastTradedVolume': 'volume'
+                })
+
+            # Determine which time column to use
+            time_col = 'snapshotTimeUTC' if 'snapshotTimeUTC' in df.columns else 'snapshotTime'
+            df['time'] = pd.to_datetime(df[time_col])
+
+            # Remove duplicates (keep last entry for each timestamp)
+            df = df.drop_duplicates(subset=['time'], keep='last')
+
+            # Set index
+            df = df.set_index('time')
+
+            # Select OHLCV columns
+            df = df[['open', 'high', 'low', 'close', 'volume']]
+
+            # Ensure all are float (already extracted from dicts, so should be clean)
+            for col in ['open', 'high', 'low', 'close']:
+                df[col] = df[col].astype(float)
+            df['volume'] = df['volume'].astype(int)
+
+            # Sort index (ensure chronological order)
+            df = df.sort_index()
+
+            return df
+
+        except Exception as e:
+            self._log_error(f"Failed to get historical data: {e}")
+            return pd.DataFrame()
+
+    def is_market_open(self, asset: str) -> bool:
+        """Check if market is open"""
+        try:
+            market_info = self.client.single_market(asset)
+            status = market_info.get('snapshot', {}).get('marketStatus')
+            return status == 'TRADEABLE'
+        except:
+            return True  # Default to assume open
+
+    def _log_info(self, message: str):
+        """Log info message"""
+        self.log_events.append({
+            'level': 'INFO',
+            'message': message,
+            'timestamp': datetime.now()
+        })
+        print(f"[INFO] {message}")
+
+    def _log_warning(self, message: str):
+        """Log warning message"""
+        self.log_events.append({
+            'level': 'WARNING',
+            'message': message,
+            'timestamp': datetime.now()
+        })
+        print(f"[WARNING] {message}")
+
+    def _log_error(self, message: str):
+        """Log error message"""
+        self.log_events.append({
+            'level': 'ERROR',
+            'message': message,
+            'timestamp': datetime.now()
+        })
+        print(f"[ERROR] {message}")

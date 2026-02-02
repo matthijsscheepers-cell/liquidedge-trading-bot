@@ -210,9 +210,10 @@ class TTMSqueezeStrategy(BaseStrategy):
              'kc_middle', 'atr_14']
         )
 
-        # Only trade in compression/squeeze regime
-        if regime != 'RANGE_COMPRESSION':
-            return None
+        # REGIME FILTER DISABLED - Accept TTM Squeeze trades in any regime
+        # Previously: Only trade in compression/squeeze regime
+        # if regime != 'RANGE_COMPRESSION':
+        #     return None
 
         # Need at least 4 bars for pattern detection
         if len(df) < 4:
@@ -285,6 +286,7 @@ class TTMSqueezeStrategy(BaseStrategy):
             return None
 
         # Determine direction from momentum
+        # ONLY LONG TRADES - SHORT trades have 0% win rate
         if curr_momentum > 0:
             # Bullish breakout
             direction = SignalDirection.LONG
@@ -295,13 +297,8 @@ class TTMSqueezeStrategy(BaseStrategy):
             setup_type = "SQUEEZE_RELEASE_LONG"
 
         else:
-            # Bearish breakout
-            direction = SignalDirection.SHORT
-            entry = current['close']
-            stop = entry + (self.params['initial_stop_atr'] * atr)
-            risk = stop - entry
-            target = entry - (risk * self.params['min_rrr'])
-            setup_type = "SQUEEZE_RELEASE_SHORT"
+            # Skip SHORT trades (0% win rate in backtests)
+            return None
 
         return TradeSetup(
             direction=direction,
@@ -367,6 +364,7 @@ class TTMSqueezeStrategy(BaseStrategy):
         curr_momentum = current['ttm_momentum']
 
         # Determine direction
+        # ONLY LONG TRADES - SHORT retests have 0% win rate
         if curr_momentum > 0:
             # Bullish retest
             direction = SignalDirection.LONG
@@ -382,18 +380,8 @@ class TTMSqueezeStrategy(BaseStrategy):
             setup_type = "SQUEEZE_RETEST_LONG"
 
         else:
-            # Bearish retest
-            direction = SignalDirection.SHORT
-
-            # Check for bearish confirmation (rejection of highs)
-            if not self._is_bearish_rejection(current):
-                return None
-
-            entry = current['close']
-            stop = entry + (self.params['initial_stop_atr'] * atr)
-            risk = stop - entry
-            target = entry - (risk * self.params['min_rrr'])
-            setup_type = "SQUEEZE_RETEST_SHORT"
+            # Skip SHORT retest trades (0% win rate in backtests)
+            return None
 
         return TradeSetup(
             direction=direction,

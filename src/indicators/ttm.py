@@ -37,6 +37,7 @@ from typing import Tuple, Union
 from src.indicators.volatility import (
     calculate_bollinger_bands,
     calculate_keltner_channels,
+    calculate_keltner_channels_pinescript,
     detect_squeeze
 )
 
@@ -156,6 +157,73 @@ def calculate_ttm_squeeze(
     momentum = calculate_momentum(close, period=momentum_period)
 
     # Determine momentum color (trend direction)
+    momentum_color = calculate_momentum_color(momentum)
+
+    return squeeze_on, momentum, momentum_color
+
+
+def calculate_ttm_squeeze_pinescript(
+    high: Union[pd.Series, np.ndarray],
+    low: Union[pd.Series, np.ndarray],
+    close: Union[pd.Series, np.ndarray],
+    bb_period: int = 20,
+    bb_std: float = 2.0,
+    kc_period: int = 20,
+    kc_multiplier: float = 1.0,
+    momentum_period: int = 12
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    Calculate TTM Squeeze using official PineScript/TradingView method.
+
+    This matches the Beardy Squeeze Pro indicator exactly:
+    - Bollinger Bands: SMA(close, 20) ± 2.0 * stdev
+    - Keltner Channels: SMA(close, 20) ± 1.0 * SMA(TR, 20)
+    - Squeeze ON: BB inside KC
+    - Squeeze OFF: BB outside KC
+
+    Differences from our standard version:
+    - KC uses SMA of True Range (not Wilder's ATR)
+    - KC basis is SMA (not EMA)
+    - Standard multipliers: BB=2.0, KC=1.0 (not our calibrated 2.5/0.5)
+
+    Args:
+        high: High prices
+        low: Low prices
+        close: Close prices
+        bb_period: Bollinger Bands period (typically 20)
+        bb_std: Bollinger Bands standard deviations (typically 2.0)
+        kc_period: Keltner Channels period (typically 20)
+        kc_multiplier: Keltner Channels multiplier (typically 1.0)
+        momentum_period: Momentum calculation period (typically 12)
+
+    Returns:
+        Tuple of (squeeze_on, momentum, momentum_color)
+
+    Example:
+        >>> # Official TTM Squeeze settings
+        >>> squeeze_on, momentum, color = calculate_ttm_squeeze_pinescript(
+        ...     high, low, close, bb_period=20, bb_std=2.0, kc_period=20, kc_multiplier=1.0
+        ... )
+    """
+    # Calculate Bollinger Bands (same as before)
+    bb_upper, bb_middle, bb_lower, bb_width = calculate_bollinger_bands(
+        close, period=bb_period, num_std=bb_std
+    )
+
+    # Calculate Keltner Channels using PineScript method
+    kc_upper, kc_middle, kc_lower = calculate_keltner_channels_pinescript(
+        high, low, close,
+        period=kc_period,
+        multiplier=kc_multiplier
+    )
+
+    # Detect squeeze (same logic)
+    squeeze_on = detect_squeeze(bb_upper, bb_lower, kc_upper, kc_lower)
+
+    # Calculate momentum (same as before)
+    momentum = calculate_momentum(close, period=momentum_period)
+
+    # Determine momentum color
     momentum_color = calculate_momentum_color(momentum)
 
     return squeeze_on, momentum, momentum_color

@@ -95,3 +95,10 @@ dmypy.json
 
 # TODO tracker data
 data/todos.json
+
+# Backtest results
+results/*.txt
+data/backtest_results/*.png
+
+# Paper trading logs
+/tmp/paper_trading_live.log

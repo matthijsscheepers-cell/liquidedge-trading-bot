@@ -1,27 +1,24 @@
 """
-Backtesting Engine Module
+Backtesting framework for LiquidEdge.
 
-This module provides a comprehensive backtesting framework for testing
-trading strategies on historical data.
-
-Backtesting Features:
-    - Historical data simulation
-    - Realistic order execution (slippage, commissions)
-    - Portfolio tracking and P&L calculation
-    - Performance metrics and statistics
-    - Equity curve visualization
-    - Monte Carlo simulation
-    - Walk-forward analysis
-
-Performance Metrics:
-    - Total return, Annualized return
-    - Sharpe ratio, Sortino ratio, Calmar ratio
-    - Maximum drawdown, Recovery time
-    - Win rate, Profit factor
-    - Average win/loss, R-expectancy
-    - Trade statistics (number of trades, holding period)
+Components:
+- DataLoader: Load historical data
+- BacktestEngine: Run backtests
+- PerformanceCalculator: Calculate metrics
+- BacktestVisualizer: Visualize results
 """
 
-from typing import List
+from .data_loader import DataLoader, CSVDataLoader, YahooFinanceLoader, CapitalDataLoader
+from .engine import BacktestEngine
+from .performance import PerformanceCalculator
+from .visualizer import BacktestVisualizer
 
-__all__: List[str] = []
+__all__ = [
+    'DataLoader',
+    'CSVDataLoader',
+    'YahooFinanceLoader',
+    'CapitalDataLoader',
+    'BacktestEngine',
+    'PerformanceCalculator',
+    'BacktestVisualizer'
+]

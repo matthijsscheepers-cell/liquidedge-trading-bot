@@ -52,6 +52,7 @@ from .base import (
     SignalDirection,
     ExitAction,
 )
+from ..filters.session_filter import is_liquid_session, is_news_blackout
 
 
 class RegimePullbackStrategy(BaseStrategy):
@@ -115,17 +116,30 @@ class RegimePullbackStrategy(BaseStrategy):
                 'min_adx': 20,
             }
 
-        # Gold - Medium parameters
-        elif asset == "GOLD":
+        # Gold/Silver - Aggressive 15m intraday
+        elif asset in ["GOLD", "SILVER"]:
             return {
-                'initial_stop_atr': 2.5,
-                'min_rrr': 2.0,
-                'breakeven_r': 1.5,
-                'trail_start_r': 2.5,
-                'trail_distance_atr': 1.5,
-                'max_bars': 25,
-                'pullback_tolerance': 0.6,
-                'min_adx': 20,
+                'initial_stop_atr': 1.5,       # Tight stops for quick moves
+                'min_rrr': 1.0,                # Accept 1:1 on fast 15m moves
+                'breakeven_r': 0.7,            # Very early breakeven
+                'trail_start_r': 1.3,          # Quick trailing
+                'trail_distance_atr': 0.8,     # Tight trailing
+                'max_bars': 16,                # ~4 hours on 15m
+                'pullback_tolerance': 3.5,     # Very wide for commodity volatility
+                'min_adx': 6,                  # Catch weak trends on 15m
+            }
+
+        # US Indices - Aggressive 15m intraday (US100, US500)
+        elif asset in ["US100", "US500"]:
+            return {
+                'initial_stop_atr': 1.5,       # Tight for index moves
+                'min_rrr': 1.0,                # 1:1 acceptable on 15m
+                'breakeven_r': 0.7,            # Quick to breakeven
+                'trail_start_r': 1.3,          # Early trailing
+                'trail_distance_atr': 0.8,     # Tight trail
+                'max_bars': 12,                # ~3 hours on 15m
+                'pullback_tolerance': 2.5,     # Wide zone for indices
+                'min_adx': 6,                  # Low threshold for 15m
             }
 
         # Forex - varies by pair
@@ -141,17 +155,17 @@ class RegimePullbackStrategy(BaseStrategy):
                 'min_adx': 20,
             }
 
-        # Default parameters for other assets
+        # Default parameters (optimized for 15m intraday)
         else:
             return {
-                'initial_stop_atr': 2.5,
-                'min_rrr': 2.0,
-                'breakeven_r': 1.5,
-                'trail_start_r': 2.5,
-                'trail_distance_atr': 1.5,
-                'max_bars': 20,
-                'pullback_tolerance': 0.5,
-                'min_adx': 20,
+                'initial_stop_atr': 1.5,     # Tighter stops for intraday
+                'min_rrr': 1.0,              # Accept smaller targets on 15m
+                'breakeven_r': 0.8,          # Quick breakeven on 15m
+                'trail_start_r': 1.5,        # Earlier trailing on 15m
+                'trail_distance_atr': 0.8,   # Tighter trail for intraday
+                'max_bars': 20,              # ~5 hours max hold on 15m
+                'pullback_tolerance': 3.0,   # Very wide zone for 15m volatility
+                'min_adx': 6,                # Very low threshold for 15m
             }
 
     def check_entry(self,
@@ -204,15 +218,30 @@ class RegimePullbackStrategy(BaseStrategy):
         current = df.iloc[-1]
         prev = df.iloc[-2]
 
+        # Session filtering - DISABLED for 24/7 trading
+        # current_time = df.index[-1]
+        # if not is_liquid_session(current_time, self.asset):
+        #     return None
+
+        # News blackout - DISABLED for 24/7 trading
+        # if is_news_blackout(current_time):
+        #     return None
+
         # Check ADX threshold
         if current['adx_14'] < self.params['min_adx']:
             return None
+
+        # Get RSI (if available)
+        rsi = current.get('rsi_14', None)
 
         atr = current['atr_14']
         ema = current['ema_20']
 
         # Check for LONG setup
         if self._check_bullish_structure(df):
+            # RSI filter: Don't enter if overbought
+            if rsi is not None and rsi > 70:
+                return None
             # Price must be near EMA (pullback)
             distance_to_ema = abs(current['close'] - ema) / atr
             if distance_to_ema > self.params['pullback_tolerance']:
@@ -247,6 +276,10 @@ class RegimePullbackStrategy(BaseStrategy):
 
         # Check for SHORT setup
         elif self._check_bearish_structure(df):
+            # RSI filter: Don't enter if oversold
+            if rsi is not None and rsi < 30:
+                return None
+
             # Price must be near EMA (pullback)
             distance_to_ema = abs(current['close'] - ema) / atr
             if distance_to_ema > self.params['pullback_tolerance']:
@@ -321,6 +354,7 @@ class RegimePullbackStrategy(BaseStrategy):
         current = df.iloc[-1]
         current_price = current['close']
         atr = current['atr_14']
+        rsi = current.get('rsi_14', None)
 
         # Calculate current R
         r = self.calculate_r_multiple(current_price, position)
@@ -338,6 +372,10 @@ class RegimePullbackStrategy(BaseStrategy):
             # Check target
             if current_price >= position.target:
                 return ExitAction.TARGET, position.target
+
+            # RSI exit: Exit if extremely overbought
+            if rsi is not None and rsi > 85:
+                return ExitAction.TARGET, current_price
 
             # Move to breakeven at 1.5R
             if r >= self.params['breakeven_r'] and position.stop_loss < position.entry_price:
@@ -358,6 +396,10 @@ class RegimePullbackStrategy(BaseStrategy):
             # Check target
             if current_price <= position.target:
                 return ExitAction.TARGET, position.target
+
+            # RSI exit: Exit if extremely oversold
+            if rsi is not None and rsi < 15:
+                return ExitAction.TARGET, current_price
 
             # Move to breakeven at 1.5R
             if r >= self.params['breakeven_r'] and position.stop_loss > position.entry_price:
@@ -415,9 +457,10 @@ class RegimePullbackStrategy(BaseStrategy):
         """
         Check for bullish confirmation candle.
 
-        Looks for:
-            1. Bullish engulfing: current candle engulfs previous
-            2. Rejection wick: long lower wick (> 60% of range)
+        Relaxed criteria - looks for:
+            1. Bullish candle (close > open)
+            2. OR bullish engulfing pattern
+            3. OR rejection wick (> 40% of range, lowered from 60%)
 
         Args:
             current: Current bar data (open, high, low, close)
@@ -430,7 +473,11 @@ class RegimePullbackStrategy(BaseStrategy):
             >>> if self._is_bullish_confirmation(current, prev):
             ...     print("Bullish confirmation candle detected")
         """
-        # Bullish engulfing
+        # Simple bullish candle (relaxed requirement)
+        if current['close'] > current['open']:
+            return True
+
+        # Bullish engulfing (stronger signal)
         current_body = current['close'] - current['open']
         prev_body = prev['close'] - prev['open']
 
@@ -439,12 +486,12 @@ class RegimePullbackStrategy(BaseStrategy):
             current['open'] < prev['close']):
             return True
 
-        # Rejection wick (hammer-like)
+        # Rejection wick (hammer-like) - lowered from 60% to 40%
         candle_range = current['high'] - current['low']
         if candle_range > 0:
             lower_wick = current['open'] - current['low'] if current['close'] > current['open'] else current['close'] - current['low']
             wick_ratio = lower_wick / candle_range
-            if wick_ratio > 0.6 and current['close'] > current['open']:
+            if wick_ratio > 0.4:  # Lowered from 0.6 to 0.4
                 return True
 
         return False
@@ -453,9 +500,10 @@ class RegimePullbackStrategy(BaseStrategy):
         """
         Check for bearish confirmation candle.
 
-        Looks for:
-            1. Bearish engulfing: current candle engulfs previous
-            2. Rejection wick: long upper wick (> 60% of range)
+        Relaxed criteria - looks for:
+            1. Bearish candle (close < open)
+            2. OR bearish engulfing pattern
+            3. OR rejection wick (> 40% of range, lowered from 60%)
 
         Args:
             current: Current bar data (open, high, low, close)
@@ -468,7 +516,11 @@ class RegimePullbackStrategy(BaseStrategy):
             >>> if self._is_bearish_confirmation(current, prev):
             ...     print("Bearish confirmation candle detected")
         """
-        # Bearish engulfing
+        # Simple bearish candle (relaxed requirement)
+        if current['close'] < current['open']:
+            return True
+
+        # Bearish engulfing (stronger signal)
         current_body = current['close'] - current['open']
         prev_body = prev['close'] - prev['open']
 
@@ -477,12 +529,12 @@ class RegimePullbackStrategy(BaseStrategy):
             current['open'] > prev['close']):
             return True
 
-        # Rejection wick (shooting star-like)
+        # Rejection wick (shooting star-like) - lowered from 60% to 40%
         candle_range = current['high'] - current['low']
         if candle_range > 0:
             upper_wick = current['high'] - current['open'] if current['close'] < current['open'] else current['high'] - current['close']
             wick_ratio = upper_wick / candle_range
-            if wick_ratio > 0.6 and current['close'] < current['open']:
+            if wick_ratio > 0.4:  # Lowered from 0.6 to 0.4
                 return True
 
         return False

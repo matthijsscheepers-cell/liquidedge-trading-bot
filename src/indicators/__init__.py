@@ -81,6 +81,17 @@ from src.indicators.ttm import (
     get_ttm_signals,
 )
 
+# Momentum indicators
+from src.indicators.momentum import (
+    calculate_rsi,
+    calculate_rsi_df,
+    is_rsi_overbought,
+    is_rsi_oversold,
+    is_rsi_bullish,
+    is_rsi_bearish,
+    detect_rsi_divergence,
+)
+
 __all__: List[str] = [
     # Trend
     "calculate_ema",
@@ -120,4 +131,12 @@ __all__: List[str] = [
     "identify_squeeze_setups",
     "calculate_squeeze_strength",
     "get_ttm_signals",
+    # Momentum
+    "calculate_rsi",
+    "calculate_rsi_df",
+    "is_rsi_overbought",
+    "is_rsi_oversold",
+    "is_rsi_bullish",
+    "is_rsi_bearish",
+    "detect_rsi_divergence",
 ]
