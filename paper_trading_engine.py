@@ -67,8 +67,8 @@ def get_risk_cap(capital: float) -> float:
 ASSETS = {
     'GOLD': 'GOLD',           # XAU/USD
     'SILVER': 'SILVER',       # XAG/USD
-    'US100': 'US_TECH_100',   # Nasdaq 100
-    'US500': 'US_SPX_500'     # S&P 500
+    'US100': 'US100',         # Nasdaq 100
+    'US500': 'US500'          # S&P 500
 }
 
 # Monitoring intervals
@@ -98,6 +98,8 @@ class PaperTradingEngine:
         self.is_running = False
         self.last_check_time = {}
         self.start_time = datetime.now()
+        self.pending_entries = set()  # Assets with pending/active orders
+        self.pending_orders = {}  # {asset: {'order_id': str, 'expires': datetime, 'setup': setup}}
 
     def log(self, message: str, level: str = "INFO"):
         """Log message with timestamp"""
@@ -147,9 +149,14 @@ class PaperTradingEngine:
         if len(self.positions) >= MAX_POSITIONS:
             return  # Portfolio full
 
+        # Sync positions with broker to prevent duplicates
+        self._sync_positions_with_broker()
+
         for asset, strategy in self.strategies.items():
             if asset in self.positions:
                 continue  # Already in position
+            if asset in self.pending_entries:
+                continue  # Order already pending
 
             try:
                 # Fetch live data
@@ -168,6 +175,15 @@ class PaperTradingEngine:
                 if len(df_15m) < 50 or len(df_1h) < 50:
                     continue
 
+                # Verify data is fresh (not older than 30 minutes)
+                # Capital.com returns UTC timestamps (tz-naive)
+                latest_bar_time = df_15m.index[-1]
+                now_utc = pd.Timestamp.now('UTC').tz_localize(None)
+                data_age_minutes = (now_utc - latest_bar_time).total_seconds() / 60
+                if data_age_minutes > 30:
+                    self.log(f"Skipping {asset} - data is {data_age_minutes:.0f}min stale", "WARNING")
+                    continue
+
                 # Check for entry
                 setup = strategy.check_entry(df_15m, df_1h, regime='ANY', confidence=80.0)
 
@@ -178,13 +194,47 @@ class PaperTradingEngine:
                 self.log(f"Error scanning {asset}: {e}", "ERROR")
                 continue
 
+    def _sync_positions_with_broker(self):
+        """Check broker for open positions to prevent duplicates"""
+        try:
+            broker_positions = self.broker.client.all_positions()
+            if broker_positions and 'positions' in broker_positions:
+                for pos in broker_positions['positions']:
+                    epic = pos['market']['epic']
+                    # Find which asset key maps to this epic
+                    for asset_name, asset_epic in ASSETS.items():
+                        if asset_epic == epic and asset_name not in self.positions:
+                            p = pos['position']
+                            self.positions[asset_name] = {
+                                'entry_time': datetime.now(),
+                                'entry_price': float(p.get('level', 0)),
+                                'stop_loss': float(p.get('stopLevel', 0)) if p.get('stopLevel') else 0,
+                                'target': float(p.get('profitLevel', 0)) if p.get('profitLevel') else 0,
+                                'size': float(p.get('size', 0)),
+                                'margin': 0,
+                                'risk_cap': get_risk_cap(self.capital),
+                                'order_id': p.get('dealId', '')
+                            }
+                            self.log(f"Synced broker position: {asset_name} @ ${p.get('level', 0)}")
+                            break
+        except Exception as e:
+            self.log(f"Error syncing positions: {e}", "ERROR")
+
     def execute_entry(self, asset: str, setup, current_bar):
-        """Execute entry order"""
+        """Execute entry using limit order at calculated pullback level"""
+        # Lock this asset immediately to prevent duplicate orders
+        self.pending_entries.add(asset)
+
         try:
             # Calculate position size with progressive cap
             current_risk_cap = get_risk_cap(self.capital)
             risk_amount = min(self.capital * RISK_PER_TRADE, current_risk_cap)
             stop_distance = setup.entry_price - setup.stop_loss
+
+            if stop_distance <= 0:
+                self.log(f"Invalid stop distance for {asset}: {stop_distance:.2f}", "ERROR")
+                self.pending_entries.discard(asset)
+                return
 
             position_size = risk_amount / stop_distance
             position_value = position_size * setup.entry_price
@@ -193,50 +243,167 @@ class PaperTradingEngine:
             # Check if we have enough margin
             if margin_required > self.capital:
                 self.log(f"Insufficient margin for {asset} entry (need ${margin_required:.2f})", "WARNING")
+                self.pending_entries.discard(asset)
                 return
 
-            # Place order via Capital.com API
+            # Get real-time price for smart order routing
             epic = ASSETS[asset]
-            result = self.broker.place_market_order(
-                asset=epic,
-                direction='LONG',
-                units=position_size,
-                stop_loss=setup.stop_loss,
-                take_profit=setup.target
-            )
+            try:
+                market_info = self.broker.client.single_market(epic)
+                current_bid = float(market_info['snapshot']['bid'])
+                current_offer = float(market_info['snapshot']['offer'])
+                spread = current_offer - current_bid
+                self.log(f"Real-time {asset}: Bid=${current_bid:.2f} Offer=${current_offer:.2f} Spread=${spread:.2f}")
+            except Exception as e:
+                self.log(f"Can't get real-time price for {asset}: {e}", "ERROR")
+                self.pending_entries.discard(asset)
+                return
 
-            if result.success:
-                # Track position
-                self.positions[asset] = {
-                    'entry_time': datetime.now(),
-                    'entry_price': result.fill_price,
-                    'stop_loss': setup.stop_loss,
-                    'target': setup.target,
-                    'size': position_size,
-                    'margin': margin_required,
-                    'risk_cap': current_risk_cap,
-                    'order_id': result.order_id
-                }
+            entry_price = setup.entry_price
+            price_diff = current_offer - entry_price
+            price_diff_pct = (price_diff / entry_price) * 100
 
-                self.log(f"✓ ENTRY: {asset} @ ${result.fill_price:.2f}", "SUCCESS")
-                self.log(f"  Size: {position_size:.4f} units, Margin: ${margin_required:.2f}")
-                self.log(f"  Stop: ${setup.stop_loss:.2f}, Target: ${setup.target:.2f}")
-                self.log(f"  Risk Cap: ${current_risk_cap:.0f}")
+            self.log(f"Setup: Entry=${entry_price:.2f} | Current=${current_offer:.2f} | Gap={price_diff_pct:.2f}%")
+
+            # Decision: limit order vs market order
+            if current_offer <= entry_price * 1.001:
+                # Price is AT or BELOW entry level (within 0.1%) → market order
+                self.log(f"Price at/below entry level → MARKET ORDER")
+                result = self.broker.place_market_order(
+                    asset=epic,
+                    direction='LONG',
+                    units=position_size,
+                    stop_loss=setup.stop_loss,
+                    take_profit=setup.target
+                )
+
+                if result.success:
+                    slippage_pct = abs(result.fill_price - entry_price) / entry_price * 100
+                    self.positions[asset] = {
+                        'entry_time': datetime.now(),
+                        'entry_price': result.fill_price,
+                        'stop_loss': setup.stop_loss,
+                        'target': setup.target,
+                        'size': position_size,
+                        'margin': margin_required,
+                        'risk_cap': current_risk_cap,
+                        'order_id': result.order_id
+                    }
+                    self.log(f"✓ MARKET ENTRY: {asset} @ ${result.fill_price:.2f} (slippage: {slippage_pct:.2f}%)", "SUCCESS")
+                    self.log(f"  Size: {position_size:.4f} | Stop: ${setup.stop_loss:.2f} | Target: ${setup.target:.2f}")
+                else:
+                    self.log(f"✗ MARKET ENTRY FAILED: {asset} - {result.message}", "ERROR")
+                    self.pending_entries.discard(asset)
+
             else:
-                self.log(f"✗ ENTRY FAILED: {asset} - {result.message}", "ERROR")
+                # Price is ABOVE entry level → LIMIT ORDER (wait for pullback)
+                # Set expiry to 15 minutes from now (one bar)
+                expiry_time = datetime.utcnow() + timedelta(minutes=15)
+                expiry_str = expiry_time.strftime('%Y-%m-%dT%H:%M:%S')
+
+                self.log(f"Price above entry (+{price_diff_pct:.2f}%) → LIMIT ORDER @ ${entry_price:.2f}")
+                self.log(f"  Expires: {expiry_str} UTC | Stop: ${setup.stop_loss:.2f} | Target: ${setup.target:.2f}")
+
+                result = self.broker.place_limit_order(
+                    asset=epic,
+                    direction='LONG',
+                    units=position_size,
+                    limit_price=entry_price,
+                    stop_loss=setup.stop_loss,
+                    take_profit=setup.target,
+                    good_till_date=expiry_str
+                )
+
+                if result.success:
+                    self.pending_orders[asset] = {
+                        'order_id': result.order_id,
+                        'entry_price': entry_price,
+                        'stop_loss': setup.stop_loss,
+                        'target': setup.target,
+                        'size': position_size,
+                        'expires': expiry_time,
+                        'placed_at': datetime.now()
+                    }
+                    self.log(f"✓ LIMIT ORDER PLACED: {asset} @ ${entry_price:.2f} (waiting for pullback)", "SUCCESS")
+                else:
+                    self.log(f"✗ LIMIT ORDER FAILED: {asset} - {result.message}", "ERROR")
+                    self.pending_entries.discard(asset)
 
         except Exception as e:
             self.log(f"Error executing entry for {asset}: {e}", "ERROR")
+            self.pending_entries.discard(asset)
+
+    def check_pending_orders(self):
+        """Check if pending limit orders have been filled or need cancelling"""
+        if not self.pending_orders:
+            return
+
+        orders_to_remove = []
+
+        for asset, order in self.pending_orders.items():
+            try:
+                # Check if order has been filled (position now exists on broker)
+                broker_data = self.broker.client.all_positions()
+                epic = ASSETS[asset]
+                filled = False
+
+                if broker_data and 'positions' in broker_data:
+                    for bp in broker_data['positions']:
+                        if bp['market']['epic'] == epic:
+                            # Order was filled!
+                            p = bp['position']
+                            fill_price = float(p.get('level', 0))
+                            slippage_pct = abs(fill_price - order['entry_price']) / order['entry_price'] * 100
+
+                            self.positions[asset] = {
+                                'entry_time': datetime.now(),
+                                'entry_price': fill_price,
+                                'stop_loss': order['stop_loss'],
+                                'target': order['target'],
+                                'size': order['size'],
+                                'margin': 0,
+                                'risk_cap': get_risk_cap(self.capital),
+                                'order_id': p.get('dealId', '')
+                            }
+                            self.log(f"✓ LIMIT ORDER FILLED: {asset} @ ${fill_price:.2f} (slippage: {slippage_pct:.3f}%)", "SUCCESS")
+                            orders_to_remove.append(asset)
+                            filled = True
+                            break
+
+                if filled:
+                    continue
+
+                # Check if order expired
+                now_utc = datetime.utcnow()
+                if now_utc > order['expires']:
+                    self.log(f"Limit order expired: {asset} (price didn't reach ${order['entry_price']:.2f})", "INFO")
+                    # Try to cancel on broker side
+                    if order.get('order_id'):
+                        self.broker.cancel_order(order['order_id'])
+                    orders_to_remove.append(asset)
+                    self.pending_entries.discard(asset)
+
+            except Exception as e:
+                self.log(f"Error checking pending order for {asset}: {e}", "ERROR")
+
+        # Clean up
+        for asset in orders_to_remove:
+            if asset in self.pending_orders:
+                del self.pending_orders[asset]
 
     def check_positions(self):
         """Check all open positions for exits"""
         if not self.positions:
             return
 
-        # Get current positions from broker
+        # Get current positions from broker using raw API
         try:
-            open_positions = self.broker.get_open_positions()
-            broker_positions = {pos.asset: pos for pos in open_positions}
+            broker_data = self.broker.client.all_positions()
+            broker_positions = {}
+            if broker_data and 'positions' in broker_data:
+                for bp in broker_data['positions']:
+                    epic = bp['market']['epic']
+                    broker_positions[epic] = bp
 
             positions_to_close = []
 
@@ -245,30 +412,30 @@ class PaperTradingEngine:
 
                 # Check if position still exists on broker
                 if epic not in broker_positions:
-                    self.log(f"Position {asset} no longer open (closed externally)", "INFO")
+                    self.log(f"Position {asset} closed (stop/target hit or manual close)", "INFO")
                     positions_to_close.append(asset)
+                    # Update capital from broker balance
+                    try:
+                        account = self.broker.get_account_info()
+                        self.capital = account.balance
+                    except:
+                        pass
                     continue
 
-                broker_pos = broker_positions[epic]
-                current_price = broker_pos.current_price
-                unrealized_pnl = broker_pos.unrealized_pnl
+                # Position still open - get current price
+                bp = broker_positions[epic]
+                market = bp['market']
+                position = bp['position']
+                current_bid = float(market.get('bid', 0))
+                upl = float(position.get('upl', 0))
 
-                # Check if stop or target hit (broker should handle this automatically)
-                # But we track it for logging
-                if current_price <= pos['stop_loss']:
-                    self.log(f"✗ STOP HIT: {asset} @ ${current_price:.2f}, P&L: ${unrealized_pnl:.2f}", "INFO")
-                    positions_to_close.append(asset)
-
-                elif current_price >= pos['target']:
-                    self.log(f"✓ TARGET HIT: {asset} @ ${current_price:.2f}, P&L: ${unrealized_pnl:.2f}", "SUCCESS")
-                    positions_to_close.append(asset)
+                # Log position status periodically (handled by status print)
 
             # Remove closed positions from tracking
             for asset in positions_to_close:
                 if asset in self.positions:
-                    pos = self.positions[asset]
-                    # Update capital (simplified - in real system would track via broker balance)
                     del self.positions[asset]
+                    self.pending_entries.discard(asset)
 
         except Exception as e:
             self.log(f"Error checking positions: {e}", "ERROR")
@@ -290,6 +457,7 @@ class PaperTradingEngine:
             print(f"Capital:     ${self.capital:,.2f}")
 
         print(f"Positions:   {len(self.positions)}/{MAX_POSITIONS}")
+        print(f"Pending:     {len(self.pending_orders)} limit orders")
         print(f"Risk Cap:    ${get_risk_cap(self.capital):.0f}")
         print()
 
@@ -301,6 +469,16 @@ class PaperTradingEngine:
                 print(f"    Entry: ${pos['entry_price']:.2f}")
                 print(f"    Stop:  ${pos['stop_loss']:.2f}")
                 print(f"    Target: ${pos['target']:.2f}")
+                print()
+
+        # Pending limit orders
+        if self.pending_orders:
+            print("PENDING LIMIT ORDERS:")
+            for asset, order in self.pending_orders.items():
+                remaining = (order['expires'] - datetime.utcnow()).total_seconds()
+                print(f"  {asset}:")
+                print(f"    Limit: ${order['entry_price']:.2f}")
+                print(f"    Expires in: {max(0, remaining):.0f}s")
                 print()
 
         # Runtime stats
@@ -352,8 +530,9 @@ class PaperTradingEngine:
                     self.check_for_setups()
                     last_setup_check = current_time
 
-                # Check positions
+                # Check positions and pending orders
                 if current_time - last_position_check >= POSITION_CHECK_INTERVAL:
+                    self.check_pending_orders()
                     self.check_positions()
                     last_position_check = current_time
 

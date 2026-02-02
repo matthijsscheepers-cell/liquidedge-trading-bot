@@ -315,34 +315,50 @@ class CapitalConnector(BrokerInterface):
             # Execute order
             response = self.client.place_the_position(**kwargs)
 
-            # Parse response
-            if response and response.get('dealStatus') == 'ACCEPTED':
-                deal_ref = response.get('dealReference')
+            # Parse response - initial response only contains dealReference
+            deal_ref = response.get('dealReference') if response else None
 
+            if deal_ref:
                 # Get confirmation (may need short delay)
                 time.sleep(0.5)
                 confirmation = self.client.position_order_confirmation(deal_ref)
 
-                return OrderResult(
-                    success=True,
-                    order_id=confirmation.get('dealId'),
-                    fill_price=float(confirmation.get('level', 0)),
-                    filled_units=abs(units),
-                    message="Order filled",
-                    timestamp=datetime.now(),
-                    metadata={
-                        'dealReference': deal_ref,
-                        'direction': direction,
-                        'asset': asset
-                    }
-                )
+                deal_status = confirmation.get('dealStatus', '')
+
+                if deal_status == 'ACCEPTED':
+                    return OrderResult(
+                        success=True,
+                        order_id=confirmation.get('dealId'),
+                        fill_price=float(confirmation.get('level', 0)),
+                        filled_units=float(confirmation.get('size', abs(units))),
+                        message="Order filled",
+                        timestamp=datetime.now(),
+                        metadata={
+                            'dealReference': deal_ref,
+                            'direction': direction,
+                            'asset': asset,
+                            'stopLevel': confirmation.get('stopLevel'),
+                            'profitLevel': confirmation.get('profitLevel')
+                        }
+                    )
+                else:
+                    reason = confirmation.get('reason', 'Unknown')
+                    return OrderResult(
+                        success=False,
+                        order_id=None,
+                        fill_price=None,
+                        filled_units=0,
+                        message=f"Order rejected: {reason}",
+                        timestamp=datetime.now(),
+                        metadata=confirmation
+                    )
             else:
                 return OrderResult(
                     success=False,
                     order_id=None,
                     fill_price=None,
                     filled_units=0,
-                    message=f"Order rejected: {response.get('reason', 'Unknown')}",
+                    message=f"Order rejected: No deal reference received",
                     timestamp=datetime.now(),
                     metadata=response
                 )
@@ -360,6 +376,125 @@ class CapitalConnector(BrokerInterface):
                 timestamp=datetime.now(),
                 metadata=None
             )
+
+    def place_limit_order(self,
+                         asset: str,
+                         direction: str,
+                         units: float,
+                         limit_price: float,
+                         stop_loss: Optional[float] = None,
+                         take_profit: Optional[float] = None,
+                         good_till_date: Optional[str] = None) -> OrderResult:
+        """
+        Place a limit order on Capital.com
+
+        Args:
+            asset: Instrument epic
+            direction: 'LONG' or 'SHORT'
+            units: Position size
+            limit_price: The limit price to enter at
+            stop_loss: Stop loss price
+            take_profit: Take profit price
+            good_till_date: Expiry datetime string (ISO format)
+
+        Returns:
+            OrderResult with order details
+        """
+        self._check_rate_limit()
+
+        try:
+            from capitalcom.client_demo import DirectionType, OrderType
+
+            cap_direction = DirectionType.BUY if direction == 'LONG' else DirectionType.SELL
+
+            kwargs = {
+                'direction': cap_direction,
+                'epic': asset,
+                'size': abs(units),
+                'level': limit_price,
+                'type': OrderType.LIMIT,
+                'gsl': False,
+                'tsl': False
+            }
+
+            if stop_loss:
+                kwargs['stop_level'] = stop_loss
+            if take_profit:
+                kwargs['profit_level'] = take_profit
+            if good_till_date:
+                kwargs['good_till_date'] = good_till_date
+
+            response = self.client.place_the_order(**kwargs)
+            deal_ref = response.get('dealReference') if response else None
+
+            if deal_ref:
+                time.sleep(0.5)
+                confirmation = self.client.position_order_confirmation(deal_ref)
+                deal_status = confirmation.get('dealStatus', '')
+
+                if deal_status == 'ACCEPTED':
+                    return OrderResult(
+                        success=True,
+                        order_id=confirmation.get('dealId'),
+                        fill_price=limit_price,
+                        filled_units=abs(units),
+                        message="Limit order placed",
+                        timestamp=datetime.now(),
+                        metadata={
+                            'dealReference': deal_ref,
+                            'type': 'LIMIT',
+                            'level': limit_price,
+                            'direction': direction,
+                            'asset': asset,
+                            'goodTillDate': good_till_date,
+                            'stopLevel': confirmation.get('stopLevel'),
+                            'profitLevel': confirmation.get('profitLevel')
+                        }
+                    )
+                else:
+                    reason = confirmation.get('reason', 'Unknown')
+                    return OrderResult(
+                        success=False,
+                        order_id=None,
+                        fill_price=None,
+                        filled_units=0,
+                        message=f"Limit order rejected: {reason}",
+                        timestamp=datetime.now(),
+                        metadata=confirmation
+                    )
+            else:
+                return OrderResult(
+                    success=False,
+                    order_id=None,
+                    fill_price=None,
+                    filled_units=0,
+                    message="Limit order rejected: No deal reference",
+                    timestamp=datetime.now(),
+                    metadata=response
+                )
+
+        except Exception as e:
+            self.connection_errors += 1
+            self._log_error(f"Limit order placement failed: {e}")
+            return OrderResult(
+                success=False,
+                order_id=None,
+                fill_price=None,
+                filled_units=0,
+                message=f"Error: {str(e)}",
+                timestamp=datetime.now(),
+                metadata=None
+            )
+
+    def cancel_order(self, deal_id: str) -> bool:
+        """Cancel a pending order"""
+        try:
+            self.client.close_order(deal_id)
+            self._log_info(f"Cancelled order {deal_id}")
+            return True
+        except Exception as e:
+            self._log_error(f"Failed to cancel order {deal_id}: {e}")
+            return False
 
     @retry_on_failure(max_attempts=2, delay=1)
     def modify_position(self,
