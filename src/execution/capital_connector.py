@@ -172,6 +172,33 @@ class CapitalConnector(BrokerInterface):
             self._log_error(f"Connection failed: {e}")
             raise ConnectionError(f"Failed to connect to Capital.com: {e}")
 
+    def reconnect(self) -> bool:
+        """
+        Re-establish connection to Capital.com API.
+        Creates a fresh Client with new session tokens.
+
+        Returns:
+            True if reconnection successful
+        """
+        self._log_info("Attempting to reconnect to Capital.com...")
+
+        # Try to cleanly disconnect first
+        if self.client:
+            try:
+                self.client.log_out_account()
+            except:
+                pass
+
+        self.client = None
+        self.is_connected = False
+        self.connection_errors = 0
+
+        try:
+            return self.connect()
+        except Exception as e:
+            self._log_error(f"Reconnection failed: {e}")
+            return False
+
     def disconnect(self) -> None:
         """Disconnect from Capital.com"""
         if self.client:
@@ -672,6 +699,9 @@ class CapitalConnector(BrokerInterface):
                 resolution=resolution,
                 max=count
             )
+
+            # Reset error counter on successful data fetch
+            self.connection_errors = 0
 
             # Convert to DataFrame
             df = pd.DataFrame(data.get('prices', []))

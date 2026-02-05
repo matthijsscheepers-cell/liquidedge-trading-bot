@@ -17,7 +17,7 @@ sys.path.insert(0, '.')
 
 import time
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 from dotenv import load_dotenv
 
@@ -72,8 +72,27 @@ ASSETS = {
 }
 
 # Monitoring intervals
-CHECK_INTERVAL = 15  # Check for setups every 15 seconds
-POSITION_CHECK_INTERVAL = 15  # Check positions every 15 seconds
+CHECK_INTERVAL = 5  # Check for setups every 5 seconds
+POSITION_CHECK_INTERVAL = 5  # Check positions every 5 seconds
+BAR_CLOSE_BURST_WINDOW = 10  # Seconds after bar close to scan rapidly
+BAR_CLOSE_BURST_INTERVAL = 2  # Scan every 2 seconds during burst
+LIMIT_ORDER_EXPIRY_MINUTES = 5  # Limit order expiry (minutes)
+
+# Spread filter thresholds (max spread as % of mid price)
+MAX_SPREAD_PCT = {
+    'GOLD': 0.20,    # Metals: max 0.20%
+    'SILVER': 0.20,  # Metals: max 0.20%
+    'US100': 0.10,   # Indices: max 0.10%
+    'US500': 0.10,   # Indices: max 0.10%
+}
+
+# Slippage tracking
+BAD_EXECUTION_THRESHOLD = 0.15  # Flag fills with > 0.15% slippage
+
+# Circuit breakers
+CONSECUTIVE_STOP_LIMIT = 2       # Consecutive stops before cooldown
+ASSET_COOLDOWN_HOURS = 4         # Hours to pause asset after consecutive stops
+DAILY_LOSS_MULTIPLIER = 3        # Daily loss limit = multiplier × risk cap
 
 # =====================================================
 # PAPER TRADING ENGINE
@@ -100,6 +119,22 @@ class PaperTradingEngine:
         self.start_time = datetime.now()
         self.pending_entries = set()  # Assets with pending/active orders
         self.pending_orders = {}  # {asset: {'order_id': str, 'expires': datetime, 'setup': setup}}
+
+        # Connection health tracking
+        self.consecutive_data_failures = 0
+        self.max_data_failures_before_reconnect = 3  # 3 full scan cycles with no data → reconnect
+        self.last_reconnect_time = None
+        self.reconnect_cooldown = 60  # Minimum seconds between reconnect attempts
+
+        # Execution quality tracking (rolling window)
+        self.execution_log = []  # [{asset, time, intended, actual, slippage_pct, bad}]
+
+        # Circuit breakers
+        self.consecutive_stops = {}   # {asset: count}
+        self.asset_cooldowns = {}     # {asset: cooldown_until_datetime}
+        self.daily_losses = 0.0
+        self.daily_loss_date = datetime.now().date()
+        self.trading_halted = False
 
     def log(self, message: str, level: str = "INFO"):
         """Log message with timestamp"""
@@ -144,19 +179,67 @@ class PaperTradingEngine:
 
         return df
 
+    def _attempt_reconnect(self):
+        """Attempt to reconnect to Capital.com API"""
+        now = time.time()
+        if self.last_reconnect_time and (now - self.last_reconnect_time) < self.reconnect_cooldown:
+            return False  # Too soon since last attempt
+
+        self.last_reconnect_time = now
+        self.log("API session appears expired - attempting reconnect...", "WARNING")
+
+        success = self.broker.reconnect()
+        if success:
+            self.consecutive_data_failures = 0
+            self.log("Reconnected to Capital.com successfully!", "INFO")
+            return True
+        else:
+            self.log("Reconnection failed - will retry next cycle", "ERROR")
+            return False
+
     def check_for_setups(self):
         """Scan all assets for entry setups"""
         if len(self.positions) >= MAX_POSITIONS:
             return  # Portfolio full
 
+        # Daily loss limit reset on new day
+        today = datetime.now().date()
+        if today != self.daily_loss_date:
+            self.daily_losses = 0.0
+            self.daily_loss_date = today
+            if self.trading_halted:
+                self.trading_halted = False
+                self.log("New trading day - daily loss limit reset", "INFO")
+
+        # Daily loss limit circuit breaker
+        if self.trading_halted:
+            return
+
         # Sync positions with broker to prevent duplicates
-        self._sync_positions_with_broker()
+        try:
+            self._sync_positions_with_broker()
+        except Exception as e:
+            self.log(f"Broker sync failed: {e}", "ERROR")
+
+        assets_with_data = 0
+        assets_checked = 0
 
         for asset, strategy in self.strategies.items():
             if asset in self.positions:
                 continue  # Already in position
             if asset in self.pending_entries:
                 continue  # Order already pending
+
+            # Consecutive stop cooldown check
+            if asset in self.asset_cooldowns:
+                if datetime.now() < self.asset_cooldowns[asset]:
+                    continue  # Asset on cooldown
+                else:
+                    del self.asset_cooldowns[asset]
+                    self.consecutive_stops.pop(asset, None)
+                    self.log(f"COOLDOWN_EXPIRED: {asset} - resuming trading", "INFO")
+
+            assets_checked += 1
 
             try:
                 # Fetch live data
@@ -166,6 +249,8 @@ class PaperTradingEngine:
                 if df_15m.empty or df_1h.empty:
                     # Market closed or no data available - skip silently
                     continue
+
+                assets_with_data += 1
 
                 # Add indicators
                 df_15m = self.add_indicators(df_15m, '15m')
@@ -194,6 +279,15 @@ class PaperTradingEngine:
                 self.log(f"Error scanning {asset}: {e}", "ERROR")
                 continue
 
+        # Track data failures for auto-reconnect
+        if assets_checked > 0 and assets_with_data == 0:
+            self.consecutive_data_failures += 1
+            if self.consecutive_data_failures >= self.max_data_failures_before_reconnect:
+                self._attempt_reconnect()
+        else:
+            # Got data from at least one asset - connection is fine
+            self.consecutive_data_failures = 0
+
     def _sync_positions_with_broker(self):
         """Check broker for open positions to prevent duplicates"""
         try:
@@ -219,6 +313,25 @@ class PaperTradingEngine:
                             break
         except Exception as e:
             self.log(f"Error syncing positions: {e}", "ERROR")
+
+    def _log_execution(self, asset: str, intended_price: float, actual_price: float, order_type: str):
+        """Log execution quality to rolling window"""
+        slippage_pct = abs(actual_price - intended_price) / intended_price * 100
+        is_bad = slippage_pct > BAD_EXECUTION_THRESHOLD
+
+        entry = {
+            'asset': asset,
+            'time': datetime.now(),
+            'intended': intended_price,
+            'actual': actual_price,
+            'slippage_pct': slippage_pct,
+            'order_type': order_type,
+            'bad_execution': is_bad
+        }
+        self.execution_log.append(entry)
+
+        if is_bad:
+            self.log(f"BAD_EXECUTION: {asset} {order_type} intended=${intended_price:.2f} actual=${actual_price:.2f} slippage={slippage_pct:.3f}%", "WARNING")
 
     def execute_entry(self, asset: str, setup, current_bar):
         """Execute entry using limit order at calculated pullback level"""
@@ -259,11 +372,21 @@ class PaperTradingEngine:
                 self.pending_entries.discard(asset)
                 return
 
+            # Spread filter - block entry if spread is abnormally wide
+            mid_price = (current_bid + current_offer) / 2
+            spread_pct = (spread / mid_price) * 100
+            max_spread = MAX_SPREAD_PCT.get(asset, 0.20)
+
+            if spread_pct > max_spread:
+                self.log(f"BLOCKED_SPREAD: {asset} spread={spread_pct:.3f}% > max {max_spread:.2f}% (${spread:.2f})", "WARNING")
+                self.pending_entries.discard(asset)
+                return
+
             entry_price = setup.entry_price
             price_diff = current_offer - entry_price
             price_diff_pct = (price_diff / entry_price) * 100
 
-            self.log(f"Setup: Entry=${entry_price:.2f} | Current=${current_offer:.2f} | Gap={price_diff_pct:.2f}%")
+            self.log(f"Setup: Entry=${entry_price:.2f} | Current=${current_offer:.2f} | Gap={price_diff_pct:.2f}% | Spread={spread_pct:.3f}%")
 
             # Decision: limit order vs market order
             if current_offer <= entry_price * 1.001:
@@ -279,6 +402,7 @@ class PaperTradingEngine:
 
                 if result.success:
                     slippage_pct = abs(result.fill_price - entry_price) / entry_price * 100
+                    is_bad = slippage_pct > BAD_EXECUTION_THRESHOLD
                     self.positions[asset] = {
                         'entry_time': datetime.now(),
                         'entry_price': result.fill_price,
@@ -289,7 +413,8 @@ class PaperTradingEngine:
                         'risk_cap': current_risk_cap,
                         'order_id': result.order_id
                     }
-                    self.log(f"✓ MARKET ENTRY: {asset} @ ${result.fill_price:.2f} (slippage: {slippage_pct:.2f}%)", "SUCCESS")
+                    self._log_execution(asset, entry_price, result.fill_price, 'MARKET')
+                    self.log(f"✓ MARKET ENTRY: {asset} @ ${result.fill_price:.2f} (slippage: {slippage_pct:.2f}%{'  BAD_EXECUTION' if is_bad else ''})", "SUCCESS")
                     self.log(f"  Size: {position_size:.4f} | Stop: ${setup.stop_loss:.2f} | Target: ${setup.target:.2f}")
                 else:
                     self.log(f"✗ MARKET ENTRY FAILED: {asset} - {result.message}", "ERROR")
@@ -297,12 +422,11 @@ class PaperTradingEngine:
 
             else:
                 # Price is ABOVE entry level → LIMIT ORDER (wait for pullback)
-                # Set expiry to 15 minutes from now (one bar)
-                expiry_time = datetime.utcnow() + timedelta(minutes=15)
+                expiry_time = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=LIMIT_ORDER_EXPIRY_MINUTES)
                 expiry_str = expiry_time.strftime('%Y-%m-%dT%H:%M:%S')
 
                 self.log(f"Price above entry (+{price_diff_pct:.2f}%) → LIMIT ORDER @ ${entry_price:.2f}")
-                self.log(f"  Expires: {expiry_str} UTC | Stop: ${setup.stop_loss:.2f} | Target: ${setup.target:.2f}")
+                self.log(f"  Expires: {expiry_str} UTC ({LIMIT_ORDER_EXPIRY_MINUTES}min) | Stop: ${setup.stop_loss:.2f} | Target: ${setup.target:.2f}")
 
                 result = self.broker.place_limit_order(
                     asset=epic,
@@ -355,6 +479,7 @@ class PaperTradingEngine:
                             fill_price = float(p.get('level', 0))
                             slippage_pct = abs(fill_price - order['entry_price']) / order['entry_price'] * 100
 
+                            is_bad = slippage_pct > BAD_EXECUTION_THRESHOLD
                             self.positions[asset] = {
                                 'entry_time': datetime.now(),
                                 'entry_price': fill_price,
@@ -365,7 +490,8 @@ class PaperTradingEngine:
                                 'risk_cap': get_risk_cap(self.capital),
                                 'order_id': p.get('dealId', '')
                             }
-                            self.log(f"✓ LIMIT ORDER FILLED: {asset} @ ${fill_price:.2f} (slippage: {slippage_pct:.3f}%)", "SUCCESS")
+                            self._log_execution(asset, order['entry_price'], fill_price, 'LIMIT')
+                            self.log(f"✓ LIMIT ORDER FILLED: {asset} @ ${fill_price:.2f} (slippage: {slippage_pct:.3f}%{'  BAD_EXECUTION' if is_bad else ''})", "SUCCESS")
                             orders_to_remove.append(asset)
                             filled = True
                             break
@@ -374,7 +500,7 @@ class PaperTradingEngine:
                     continue
 
                 # Check if order expired
-                now_utc = datetime.utcnow()
+                now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
                 if now_utc > order['expires']:
                     self.log(f"Limit order expired: {asset} (price didn't reach ${order['entry_price']:.2f})", "INFO")
                     # Try to cancel on broker side
@@ -412,14 +538,38 @@ class PaperTradingEngine:
 
                 # Check if position still exists on broker
                 if epic not in broker_positions:
-                    self.log(f"Position {asset} closed (stop/target hit or manual close)", "INFO")
-                    positions_to_close.append(asset)
-                    # Update capital from broker balance
+                    # Determine P&L to classify as stop or target
+                    old_capital = self.capital
                     try:
                         account = self.broker.get_account_info()
                         self.capital = account.balance
                     except:
                         pass
+                    pnl = self.capital - old_capital
+
+                    if pnl < 0:
+                        # Loss - likely stopped out
+                        self.consecutive_stops[asset] = self.consecutive_stops.get(asset, 0) + 1
+                        self.daily_losses += abs(pnl)
+                        self.log(f"STOP_OUT: {asset} P&L=${pnl:.2f} | Consecutive stops: {self.consecutive_stops[asset]}/{CONSECUTIVE_STOP_LIMIT} | Daily losses: ${self.daily_losses:.2f}", "WARNING")
+
+                        # Check consecutive stop cooldown
+                        if self.consecutive_stops[asset] >= CONSECUTIVE_STOP_LIMIT:
+                            cooldown_until = datetime.now() + timedelta(hours=ASSET_COOLDOWN_HOURS)
+                            self.asset_cooldowns[asset] = cooldown_until
+                            self.log(f"COOLDOWN_ACTIVE: {asset} - {self.consecutive_stops[asset]} consecutive stops, paused until {cooldown_until.strftime('%H:%M')}", "WARNING")
+
+                        # Check daily loss limit
+                        daily_limit = get_risk_cap(self.capital) * DAILY_LOSS_MULTIPLIER
+                        if self.daily_losses >= daily_limit:
+                            self.trading_halted = True
+                            self.log(f"DAILY_LIMIT_REACHED: Losses ${self.daily_losses:.2f} >= limit ${daily_limit:.2f} - trading halted until tomorrow", "WARNING")
+                    else:
+                        # Win - reset consecutive stop counter
+                        self.consecutive_stops[asset] = 0
+                        self.log(f"TARGET_HIT: {asset} P&L=+${pnl:.2f}", "INFO")
+
+                    positions_to_close.append(asset)
                     continue
 
                 # Position still open - get current price
@@ -475,11 +625,39 @@ class PaperTradingEngine:
         if self.pending_orders:
             print("PENDING LIMIT ORDERS:")
             for asset, order in self.pending_orders.items():
-                remaining = (order['expires'] - datetime.utcnow()).total_seconds()
+                remaining = (order['expires'] - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds()
                 print(f"  {asset}:")
                 print(f"    Limit: ${order['entry_price']:.2f}")
                 print(f"    Expires in: {max(0, remaining):.0f}s")
                 print()
+
+        # Execution quality stats
+        if self.execution_log:
+            total = len(self.execution_log)
+            bad = sum(1 for e in self.execution_log if e['bad_execution'])
+            avg_slip = sum(e['slippage_pct'] for e in self.execution_log) / total
+            print("EXECUTION QUALITY:")
+            print(f"  Fills: {total} | Bad (>{BAD_EXECUTION_THRESHOLD}%): {bad} | Avg slippage: {avg_slip:.3f}%")
+            for e in self.execution_log[-5:]:  # Show last 5
+                flag = " BAD" if e['bad_execution'] else ""
+                print(f"  {e['time'].strftime('%m-%d %H:%M')} {e['asset']} {e['order_type']}: {e['slippage_pct']:.3f}%{flag}")
+            print()
+
+        # Circuit breaker status
+        daily_limit = get_risk_cap(self.capital) * DAILY_LOSS_MULTIPLIER
+        print("CIRCUIT BREAKERS:")
+        print(f"  Daily losses: ${self.daily_losses:.2f} / ${daily_limit:.2f} limit {'HALTED' if self.trading_halted else 'OK'}")
+        if self.asset_cooldowns:
+            for asset, until in self.asset_cooldowns.items():
+                remaining = (until - datetime.now()).total_seconds() / 3600
+                if remaining > 0:
+                    print(f"  {asset}: COOLDOWN ({remaining:.1f}h remaining, {self.consecutive_stops.get(asset, 0)} consecutive stops)")
+        if self.consecutive_stops:
+            active_counts = {a: c for a, c in self.consecutive_stops.items() if c > 0 and a not in self.asset_cooldowns}
+            if active_counts:
+                for asset, count in active_counts.items():
+                    print(f"  {asset}: {count}/{CONSECUTIVE_STOP_LIMIT} consecutive stops")
+        print()
 
         # Runtime stats
         uptime = datetime.now() - self.start_time
@@ -496,6 +674,14 @@ class PaperTradingEngine:
         self.log(f"Assets: {', '.join(ASSETS.keys())}")
         self.log(f"Environment: {CAPITAL_CONFIG['environment'].upper()}")
         self.log("")
+
+        # Sync capital from broker (use actual balance, not initial)
+        try:
+            account = self.broker.get_account_info()
+            self.capital = account.balance
+            self.log(f"Capital synced from broker: ${self.capital:,.2f}")
+        except Exception as e:
+            self.log(f"Could not sync capital, using ${self.capital:,.2f}: {e}", "WARNING")
 
         # Check which markets are currently operational
         self.log("Checking market availability...")
@@ -519,13 +705,29 @@ class PaperTradingEngine:
         last_setup_check = time.time()
         last_position_check = time.time()
         last_status_print = time.time()
+        last_bar_close_logged = None
 
         try:
             while self.is_running:
                 current_time = time.time()
 
+                # Bar-close alignment: detect proximity to 15-minute boundaries
+                now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+                seconds_into_bar = (now_utc.minute % 15) * 60 + now_utc.second
+                is_bar_close_window = seconds_into_bar < BAR_CLOSE_BURST_WINDOW
+
+                # Use burst interval near bar close, normal interval otherwise
+                scan_interval = BAR_CLOSE_BURST_INTERVAL if is_bar_close_window else CHECK_INTERVAL
+
+                # Log bar close detection once per boundary
+                if is_bar_close_window:
+                    bar_key = f"{now_utc.hour}:{(now_utc.minute // 15) * 15:02d}"
+                    if bar_key != last_bar_close_logged:
+                        self.log(f"15m bar closed ({bar_key} UTC) - burst scanning", "INFO")
+                        last_bar_close_logged = bar_key
+
                 # Check for new setups
-                if current_time - last_setup_check >= CHECK_INTERVAL:
+                if current_time - last_setup_check >= scan_interval:
                     self.log("Scanning for entry setups...")
                     self.check_for_setups()
                     last_setup_check = current_time
@@ -541,7 +743,7 @@ class PaperTradingEngine:
                     self.print_status()
                     last_status_print = current_time
 
-                time.sleep(5)  # Sleep 5 seconds between cycles
+                time.sleep(1)  # Sleep 1 second between cycles for responsive bar detection
 
         except KeyboardInterrupt:
             self.log("\nShutdown requested by user", "WARNING")
