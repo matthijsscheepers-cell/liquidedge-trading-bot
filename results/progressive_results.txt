@@ -1,0 +1,129 @@
+======================================================================
+OPTIMIZATION 1: PROGRESSIVE RISK CAP
+======================================================================
+
+Periode: 2010-09-12 tot 2026-01-29 (~15.5 years)
+Kapitaal: $300
+Assets: GOLD, SILVER, US100, US500
+
+Progressive Risk Cap Tiers:
+  < $1,000:     $50 max risk per trade
+  < $5,000:     $100 max risk per trade
+  < $20,000:    $200 max risk per trade
+  < $100,000:   $500 max risk per trade
+  >= $100,000:  $1,000 max risk per trade
+
+Found DBN file: glbx-mdp3-20100912-20260129.ohlcv-1m.dbn.zst
+Laden data...
+  GOLD... Loading GOLD from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MGC* symbols...
+  ✓ Found 5058086 rows for MGC
+✓ Loaded 341844 bars for GOLD
+Loading GOLD from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MGC* symbols...
+  ✓ Found 5058086 rows for MGC
+✓ Loaded 90447 bars for GOLD
+✓
+  SILVER... Loading SILVER from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for SIL* symbols...
+  ✓ Found 2469023 rows for SIL
+✓ Loaded 236848 bars for SILVER
+Loading SILVER from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for SIL* symbols...
+  ✓ Found 2469023 rows for SIL
+✓ Loaded 70331 bars for SILVER
+✓
+  US100... Loading US100 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MNQ* symbols...
+  ✓ Found 3507230 rows for MNQ
+✓ Loaded 158488 bars for US100
+Loading US100 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MNQ* symbols...
+  ✓ Found 3507230 rows for MNQ
+✓ Loaded 39776 bars for US100
+✓
+  US500... Loading US500 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MES* symbols...
+  ✓ Found 3316597 rows for MES
+✓ Loaded 158503 bars for US500
+Loading US500 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MES* symbols...
+  ✓ Found 3316597 rows for MES
+✓ Loaded 39777 bars for US500
+✓
+
+Aligning timestamps...
+✓ Common 15min timestamps: 155729
+
+======================================================================
+BACKTEST STARTEN
+======================================================================
+
+Progress: 3.2%, Capital: $630,142.13, Risk Cap: $1000, Trades: 664
+Progress: 6.4%, Capital: $1,385,445.29, Risk Cap: $1000, Trades: 1234
+Progress: 9.6%, Capital: $2,679,793.99, Risk Cap: $1000, Trades: 2040
+Progress: 12.8%, Capital: $3,814,238.22, Risk Cap: $1000, Trades: 2800
+Progress: 16.1%, Capital: $4,665,791.35, Risk Cap: $1000, Trades: 3369
+Progress: 19.3%, Capital: $5,204,868.36, Risk Cap: $1000, Trades: 3839
+Progress: 22.5%, Capital: $5,945,559.45, Risk Cap: $1000, Trades: 4428
+Progress: 25.7%, Capital: $6,700,607.53, Risk Cap: $1000, Trades: 5024
+Progress: 28.9%, Capital: $7,520,418.89, Risk Cap: $1000, Trades: 5587
+Progress: 32.1%, Capital: $8,142,003.55, Risk Cap: $1000, Trades: 6086
+Progress: 35.3%, Capital: $8,659,565.49, Risk Cap: $1000, Trades: 6629
+Progress: 38.5%, Capital: $9,506,818.47, Risk Cap: $1000, Trades: 7301
+Progress: 41.7%, Capital: $10,482,487.08, Risk Cap: $1000, Trades: 7903
+Progress: 44.9%, Capital: $11,315,961.10, Risk Cap: $1000, Trades: 8461
+Progress: 48.2%, Capital: $12,077,180.81, Risk Cap: $1000, Trades: 8816
+Progress: 51.4%, Capital: $12,759,080.46, Risk Cap: $1000, Trades: 9127
+Progress: 54.6%, Capital: $13,457,062.76, Risk Cap: $1000, Trades: 9431
+Progress: 57.8%, Capital: $13,849,691.37, Risk Cap: $1000, Trades: 9596
+Progress: 61.0%, Capital: $14,115,531.59, Risk Cap: $1000, Trades: 9703
+Progress: 64.2%, Capital: $14,338,978.74, Risk Cap: $1000, Trades: 9798
+Progress: 67.4%, Capital: $14,666,192.35, Risk Cap: $1000, Trades: 9930
+Progress: 70.6%, Capital: $14,826,098.27, Risk Cap: $1000, Trades: 10000
+Progress: 73.8%, Capital: $14,972,804.28, Risk Cap: $1000, Trades: 10066
+Progress: 77.1%, Capital: $15,201,740.46, Risk Cap: $1000, Trades: 10163
+Progress: 80.3%, Capital: $15,323,445.33, Risk Cap: $1000, Trades: 10228
+Progress: 83.5%, Capital: $15,598,275.12, Risk Cap: $1000, Trades: 10342
+Progress: 86.7%, Capital: $15,834,725.20, Risk Cap: $1000, Trades: 10456
+Progress: 89.9%, Capital: $16,104,057.14, Risk Cap: $1000, Trades: 10589
+Progress: 93.1%, Capital: $16,276,252.44, Risk Cap: $1000, Trades: 10661
+Progress: 96.3%, Capital: $16,463,521.53, Risk Cap: $1000, Trades: 10748
+Progress: 99.5%, Capital: $16,678,772.01, Risk Cap: $1000, Trades: 10851
+
+======================================================================
+RESULTS - PROGRESSIVE RISK CAP
+======================================================================
+
+Total trades: 10892
+Final capital: $16,772,834.47
+
+PERFORMANCE METRICS
+----------------------------------------------------------------------
+Initial Capital:     $300.00
+Final Capital:       $16,772,834.47
+Total Return:        5590844.82%
+
+Total Trades:        10892
+Win Rate:            77.0%
+Avg Win:             $2,402.71
+Avg Loss:            $-1,350.41
+Profit Factor:       5.96
+
+======================================================================

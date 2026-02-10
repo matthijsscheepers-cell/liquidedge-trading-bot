@@ -1,0 +1,130 @@
+======================================================================
+OPTIMIZATION 3: KELLY CRITERION POSITION SIZING
+======================================================================
+
+Periode: 2010-09-12 tot 2026-01-29 (~15.5 years)
+Kapitaal: $300
+Assets: GOLD, SILVER, US100, US500
+Max Risk Cap: $50
+Kelly Lookback: 100 trades
+Kelly Fraction: 0.5 (half-Kelly)
+
+Kelly Criterion adjusts position size based on recent performance
+Formula: (Win Rate × Avg Win - Loss Rate × Avg Loss) / Avg Win
+
+Found DBN file: glbx-mdp3-20100912-20260129.ohlcv-1m.dbn.zst
+Laden data...
+  GOLD... Loading GOLD from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MGC* symbols...
+  ✓ Found 5058086 rows for MGC
+✓ Loaded 341844 bars for GOLD
+Loading GOLD from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MGC* symbols...
+  ✓ Found 5058086 rows for MGC
+✓ Loaded 90447 bars for GOLD
+✓
+  SILVER... Loading SILVER from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for SIL* symbols...
+  ✓ Found 2469023 rows for SIL
+✓ Loaded 236848 bars for SILVER
+Loading SILVER from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for SIL* symbols...
+  ✓ Found 2469023 rows for SIL
+✓ Loaded 70331 bars for SILVER
+✓
+  US100... Loading US100 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MNQ* symbols...
+  ✓ Found 3507230 rows for MNQ
+✓ Loaded 158488 bars for US100
+Loading US100 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MNQ* symbols...
+  ✓ Found 3507230 rows for MNQ
+✓ Loaded 39776 bars for US100
+✓
+  US500... Loading US500 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MES* symbols...
+  ✓ Found 3316597 rows for MES
+✓ Loaded 158503 bars for US500
+Loading US500 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MES* symbols...
+  ✓ Found 3316597 rows for MES
+✓ Loaded 39777 bars for US500
+✓
+
+Aligning timestamps...
+✓ Common 15min timestamps: 155729
+
+======================================================================
+BACKTEST STARTEN
+======================================================================
+
+Progress: 3.2%, Capital: $40,665.95, Kelly: 10.00%, Trades: 570
+Progress: 6.4%, Capital: $78,431.10, Kelly: 10.00%, Trades: 1140
+Progress: 9.6%, Capital: $143,148.54, Kelly: 10.00%, Trades: 1946
+Progress: 12.8%, Capital: $199,870.75, Kelly: 10.00%, Trades: 2706
+Progress: 16.1%, Capital: $242,448.41, Kelly: 10.00%, Trades: 3275
+Progress: 19.3%, Capital: $269,402.26, Kelly: 10.00%, Trades: 3745
+Progress: 22.5%, Capital: $306,436.81, Kelly: 10.00%, Trades: 4334
+Progress: 25.7%, Capital: $344,189.22, Kelly: 10.00%, Trades: 4930
+Progress: 28.9%, Capital: $385,179.78, Kelly: 10.00%, Trades: 5493
+Progress: 32.1%, Capital: $416,259.02, Kelly: 10.00%, Trades: 5992
+Progress: 35.3%, Capital: $442,137.11, Kelly: 10.00%, Trades: 6535
+Progress: 38.5%, Capital: $484,499.76, Kelly: 10.00%, Trades: 7207
+Progress: 41.7%, Capital: $533,283.19, Kelly: 10.00%, Trades: 7809
+Progress: 44.9%, Capital: $574,956.89, Kelly: 10.00%, Trades: 8367
+Progress: 48.2%, Capital: $613,017.88, Kelly: 10.00%, Trades: 8722
+Progress: 51.4%, Capital: $647,112.86, Kelly: 10.00%, Trades: 9033
+Progress: 54.6%, Capital: $682,011.98, Kelly: 10.00%, Trades: 9337
+Progress: 57.8%, Capital: $701,643.41, Kelly: 10.00%, Trades: 9502
+Progress: 61.0%, Capital: $714,935.42, Kelly: 10.00%, Trades: 9609
+Progress: 64.2%, Capital: $726,107.78, Kelly: 10.00%, Trades: 9704
+Progress: 67.4%, Capital: $742,468.46, Kelly: 10.00%, Trades: 9836
+Progress: 70.6%, Capital: $750,463.75, Kelly: 10.00%, Trades: 9906
+Progress: 73.8%, Capital: $757,799.05, Kelly: 10.00%, Trades: 9972
+Progress: 77.1%, Capital: $769,245.86, Kelly: 10.00%, Trades: 10069
+Progress: 80.3%, Capital: $775,331.11, Kelly: 10.00%, Trades: 10134
+Progress: 83.5%, Capital: $789,072.60, Kelly: 10.00%, Trades: 10248
+Progress: 86.7%, Capital: $800,895.10, Kelly: 10.00%, Trades: 10362
+Progress: 89.9%, Capital: $814,361.70, Kelly: 10.00%, Trades: 10495
+Progress: 93.1%, Capital: $822,971.46, Kelly: 10.00%, Trades: 10567
+Progress: 96.3%, Capital: $832,334.92, Kelly: 10.00%, Trades: 10654
+Progress: 99.5%, Capital: $843,097.44, Kelly: 10.00%, Trades: 10757
+
+======================================================================
+RESULTS - KELLY CRITERION
+======================================================================
+
+Total trades: 10798
+Final capital: $847,800.56
+
+PERFORMANCE METRICS
+----------------------------------------------------------------------
+Initial Capital:     $300.00
+Final Capital:       $847,800.56
+Total Return:        282500.19%
+
+Total Trades:        10798
+Win Rate:            77.1%
+Avg Win:             $122.24
+Avg Loss:            $-68.42
+Profit Factor:       6.00
+
+Final Kelly %:       10.00%
+
+======================================================================

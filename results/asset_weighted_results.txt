@@ -1,0 +1,136 @@
+======================================================================
+OPTIMIZATION 2: ASSET-WEIGHTED POSITION SIZING
+======================================================================
+
+Periode: 2010-09-12 tot 2026-01-29 (~15.5 years)
+Kapitaal: $300
+Assets: GOLD, SILVER, US100, US500
+Max Risk Cap: $50
+
+Asset-Specific Risk Allocation:
+  GOLD:   3.0% (91.6% historical win rate)
+  US100:  2.0% (75.1% historical win rate)
+  US500:  1.5% (69.4% historical win rate)
+  SILVER: 1.0% (63.8% historical win rate)
+
+Found DBN file: glbx-mdp3-20100912-20260129.ohlcv-1m.dbn.zst
+Laden data...
+  GOLD... Loading GOLD from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MGC* symbols...
+  ✓ Found 5058086 rows for MGC
+✓ Loaded 341844 bars for GOLD
+Loading GOLD from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MGC* symbols...
+  ✓ Found 5058086 rows for MGC
+✓ Loaded 90447 bars for GOLD
+✓
+  SILVER... Loading SILVER from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for SIL* symbols...
+  ✓ Found 2469023 rows for SIL
+✓ Loaded 236848 bars for SILVER
+Loading SILVER from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for SIL* symbols...
+  ✓ Found 2469023 rows for SIL
+✓ Loaded 70331 bars for SILVER
+✓
+  US100... Loading US100 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MNQ* symbols...
+  ✓ Found 3507230 rows for MNQ
+✓ Loaded 158488 bars for US100
+Loading US100 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MNQ* symbols...
+  ✓ Found 3507230 rows for MNQ
+✓ Loaded 39776 bars for US100
+✓
+  US500... Loading US500 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MES* symbols...
+  ✓ Found 3316597 rows for MES
+✓ Loaded 158503 bars for US500
+Loading US500 from DBN file...
+  Converting DBN to DataFrame (16M+ rows, may take a minute)...
+  ✓ Loaded 16210239 total rows
+  Filtering for MES* symbols...
+  ✓ Found 3316597 rows for MES
+✓ Loaded 39777 bars for US500
+✓
+
+Aligning timestamps...
+✓ Common 15min timestamps: 155729
+
+======================================================================
+BACKTEST STARTEN
+======================================================================
+
+Progress: 3.2%, Capital: $42,917.02, Trades: 667
+Progress: 6.4%, Capital: $80,682.18, Trades: 1237
+Progress: 9.6%, Capital: $145,399.61, Trades: 2043
+Progress: 12.8%, Capital: $202,121.83, Trades: 2803
+Progress: 16.1%, Capital: $244,699.48, Trades: 3372
+Progress: 19.3%, Capital: $271,653.33, Trades: 3842
+Progress: 22.5%, Capital: $308,687.89, Trades: 4431
+Progress: 25.7%, Capital: $346,440.29, Trades: 5027
+Progress: 28.9%, Capital: $387,430.86, Trades: 5590
+Progress: 32.1%, Capital: $418,510.09, Trades: 6089
+Progress: 35.3%, Capital: $444,388.19, Trades: 6632
+Progress: 38.5%, Capital: $486,750.84, Trades: 7304
+Progress: 41.7%, Capital: $535,534.27, Trades: 7906
+Progress: 44.9%, Capital: $577,207.97, Trades: 8464
+Progress: 48.2%, Capital: $615,268.96, Trades: 8819
+Progress: 51.4%, Capital: $649,363.94, Trades: 9130
+Progress: 54.6%, Capital: $684,263.05, Trades: 9434
+Progress: 57.8%, Capital: $703,894.48, Trades: 9599
+Progress: 61.0%, Capital: $717,186.49, Trades: 9706
+Progress: 64.2%, Capital: $728,358.85, Trades: 9801
+Progress: 67.4%, Capital: $744,719.53, Trades: 9933
+Progress: 70.6%, Capital: $752,714.83, Trades: 10003
+Progress: 73.8%, Capital: $760,050.13, Trades: 10069
+Progress: 77.1%, Capital: $771,496.94, Trades: 10166
+Progress: 80.3%, Capital: $777,582.18, Trades: 10231
+Progress: 83.5%, Capital: $791,323.67, Trades: 10345
+Progress: 86.7%, Capital: $803,146.18, Trades: 10459
+Progress: 89.9%, Capital: $816,612.77, Trades: 10592
+Progress: 93.1%, Capital: $825,222.54, Trades: 10664
+Progress: 96.3%, Capital: $834,585.99, Trades: 10751
+Progress: 99.5%, Capital: $845,348.52, Trades: 10854
+
+======================================================================
+RESULTS - ASSET-WEIGHTED SIZING
+======================================================================
+
+Total trades: 10895
+Final capital: $850,051.64
+
+PERFORMANCE METRICS
+----------------------------------------------------------------------
+Initial Capital:     $300.00
+Final Capital:       $850,051.64
+Total Return:        283250.55%
+
+Total Trades:        10895
+Win Rate:            77.0%
+Avg Win:             $121.60
+Avg Loss:            $-67.98
+Profit Factor:       5.99
+
+PER ASSET BREAKDOWN:
+----------------------------------------------------------------------
+GOLD: 2730 trades, 91.6% WR, $307,960.09 P&L
+SILVER: 738 trades, 63.8% WR, $44,844.19 P&L
+US100: 4624 trades, 75.1% WR, $325,882.71 P&L
+US500: 2803 trades, 69.3% WR, $171,064.65 P&L
+
+======================================================================
