@@ -169,22 +169,23 @@ def calculate_ttm_squeeze_pinescript(
     bb_period: int = 20,
     bb_std: float = 2.0,
     kc_period: int = 20,
-    kc_multiplier: float = 1.0,
     momentum_period: int = 12
-) -> Tuple[pd.Series, pd.Series, pd.Series]:
+) -> Tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
     """
-    Calculate TTM Squeeze using official PineScript/TradingView method.
+    Calculate TTM Squeeze using Beardy Squeeze Pro / John Carter method.
 
-    This matches the Beardy Squeeze Pro indicator exactly:
+    Uses three Keltner Channel levels (multipliers 1.0, 1.5, 2.0) to
+    determine squeeze intensity, matching Beardy Squeeze Pro exactly:
     - Bollinger Bands: SMA(close, 20) ± 2.0 * stdev
-    - Keltner Channels: SMA(close, 20) ± 1.0 * SMA(TR, 20)
-    - Squeeze ON: BB inside KC
-    - Squeeze OFF: BB outside KC
+    - KC Level 1: SMA(close, 20) ± 1.0 * SMA(TR, 20)  (narrowest)
+    - KC Level 2: SMA(close, 20) ± 1.5 * SMA(TR, 20)
+    - KC Level 3: SMA(close, 20) ± 2.0 * SMA(TR, 20)  (widest)
 
-    Differences from our standard version:
-    - KC uses SMA of True Range (not Wilder's ATR)
-    - KC basis is SMA (not EMA)
-    - Standard multipliers: BB=2.0, KC=1.0 (not our calibrated 2.5/0.5)
+    Squeeze states (matching Beardy Squeeze Pro dot colors):
+    - No squeeze (green dots): BB outside all KC levels → intensity 0
+    - Light squeeze (black dots): BB inside KC×2.0 only → intensity 1
+    - Medium squeeze (red dots): BB inside KC×1.5 → intensity 2
+    - Tight squeeze (orange dots): BB inside KC×1.0 → intensity 3
 
     Args:
         high: High prices
@@ -193,40 +194,60 @@ def calculate_ttm_squeeze_pinescript(
         bb_period: Bollinger Bands period (typically 20)
         bb_std: Bollinger Bands standard deviations (typically 2.0)
         kc_period: Keltner Channels period (typically 20)
-        kc_multiplier: Keltner Channels multiplier (typically 1.0)
         momentum_period: Momentum calculation period (typically 12)
 
     Returns:
-        Tuple of (squeeze_on, momentum, momentum_color)
+        Tuple of (squeeze_on, momentum, momentum_color, squeeze_intensity)
+        - squeeze_on: Boolean (True when BB inside any KC level)
+        - momentum: Momentum values
+        - momentum_color: Color indicator
+        - squeeze_intensity: 0=none(green), 1=light(black), 2=medium(red), 3=tight(orange)
 
     Example:
-        >>> # Official TTM Squeeze settings
-        >>> squeeze_on, momentum, color = calculate_ttm_squeeze_pinescript(
-        ...     high, low, close, bb_period=20, bb_std=2.0, kc_period=20, kc_multiplier=1.0
+        >>> squeeze_on, momentum, color, intensity = calculate_ttm_squeeze_pinescript(
+        ...     high, low, close, bb_period=20, bb_std=2.0, kc_period=20
         ... )
+        >>> # Tight squeeze (orange dots) about to release
+        >>> tight_release = squeeze_on.shift(1) & ~squeeze_on & (intensity.shift(1) == 3)
     """
-    # Calculate Bollinger Bands (same as before)
+    # Calculate Bollinger Bands
     bb_upper, bb_middle, bb_lower, bb_width = calculate_bollinger_bands(
         close, period=bb_period, num_std=bb_std
     )
 
-    # Calculate Keltner Channels using PineScript method
-    kc_upper, kc_middle, kc_lower = calculate_keltner_channels_pinescript(
-        high, low, close,
-        period=kc_period,
-        multiplier=kc_multiplier
+    # Calculate three Keltner Channel levels (Beardy Squeeze Pro)
+    kc_upper_1, kc_middle, kc_lower_1 = calculate_keltner_channels_pinescript(
+        high, low, close, period=kc_period, multiplier=1.0
+    )
+    kc_upper_15, _, kc_lower_15 = calculate_keltner_channels_pinescript(
+        high, low, close, period=kc_period, multiplier=1.5
+    )
+    kc_upper_2, _, kc_lower_2 = calculate_keltner_channels_pinescript(
+        high, low, close, period=kc_period, multiplier=2.0
     )
 
-    # Detect squeeze (same logic)
-    squeeze_on = detect_squeeze(bb_upper, bb_lower, kc_upper, kc_lower)
+    # Detect squeeze at each level
+    squeeze_narrow = detect_squeeze(bb_upper, bb_lower, kc_upper_1, kc_lower_1)   # Orange dots (tightest)
+    squeeze_mid = detect_squeeze(bb_upper, bb_lower, kc_upper_15, kc_lower_15)    # Red dots
+    squeeze_wide = detect_squeeze(bb_upper, bb_lower, kc_upper_2, kc_lower_2)     # Black dots (first level)
 
-    # Calculate momentum (same as before)
+    # squeeze_on = BB inside widest KC (any squeeze active, black dots or deeper)
+    squeeze_on = squeeze_wide
+
+    # Squeeze intensity: 0=green, 1=black, 2=red, 3=orange
+    squeeze_intensity = (
+        squeeze_wide.astype(int) +
+        squeeze_mid.astype(int) +
+        squeeze_narrow.astype(int)
+    )
+
+    # Calculate momentum
     momentum = calculate_momentum(close, period=momentum_period)
 
     # Determine momentum color
     momentum_color = calculate_momentum_color(momentum)
 
-    return squeeze_on, momentum, momentum_color
+    return squeeze_on, momentum, momentum_color, squeeze_intensity
 
 
 def calculate_momentum_color(momentum: pd.Series) -> pd.Series:
@@ -419,6 +440,7 @@ def get_ttm_signals(
 __all__ = [
     'calculate_momentum',
     'calculate_ttm_squeeze',
+    'calculate_ttm_squeeze_pinescript',
     'calculate_momentum_color',
     'identify_squeeze_setups',
     'calculate_squeeze_strength',

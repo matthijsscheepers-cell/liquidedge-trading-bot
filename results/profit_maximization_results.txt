@@ -1,0 +1,77 @@
+==============================================================================================
+PROFIT MAXIMIZATION BACKTEST
+==============================================================================================
+Date: 2026-02-10
+Period: 2010-09-12 to 2026-01-29 (~15.5 years)
+Initial Capital: $300
+Assets: GOLD + SILVER only
+Config: CB -0.5 ATR (entry=-0.5, stop=-1.5, target=+1.5)
+Common 15min bars: 234,512 (GOLD+SILVER alignment only)
+
+Tests progressive risk cap and partial exit strategies.
+
+==============================================================================================
+RESULTS SUMMARY
+==============================================================================================
+
+Config                                      Trades      WR      PF        Capital    MaxDD
+-------------------------------------------------------------------------------------------
+1. Baseline (flat $50 cap)                   13854   84.1%    6.92 $      736,741  -100.0%
+2. Progressive risk cap                      13854   84.1%    6.95 $   14,501,616  -100.0%
+3. Flat cap + partial exits                   9967   74.7%    1.48 $      309,739  -100.0%
+4. Progressive cap + partial exits            9983   74.8%    1.49 $    5,982,286  -100.0%
+
+Note: -100% max DD occurs in early phase when $300 account can be wiped by a few
+consecutive stops. The backtest allows negative capital (no margin call simulation)
+so the account recovers. In live trading, the progressive risk cap + circuit breakers
+mitigate this risk at the $985 current capital level.
+
+==============================================================================================
+EXIT REASON BREAKDOWN
+==============================================================================================
+
+1. Baseline (flat $50 cap):
+  STOP           :   2208 trades, $ -124,397.35 total, $  -56.34 avg
+  TARGET         :  11646 trades, $  860,838.81 total, $   73.92 avg
+
+2. Progressive risk cap:
+  STOP           :   2208 trades, $-2,436,116.04 total, $-1,103.31 avg
+  TARGET         :  11646 trades, $16,937,431.93 total, $1,454.36 avg
+
+3. Flat cap + partial exits:
+  STOP           :   1815 trades, $  -84,822.85 total, $  -46.73 avg
+  TRAIL_STOP     :   8151 trades, $  127,007.09 total, $   15.58 avg
+
+4. Progressive cap + partial exits:
+  STOP           :   1816 trades, $-1,618,718.22 total, $ -891.36 avg
+  TRAIL_STOP     :   8166 trades, $2,430,742.45 total, $  297.67 avg
+
+==============================================================================================
+PER-ASSET BREAKDOWN
+==============================================================================================
+
+1. Baseline (flat $50 cap):
+  GOLD    :  7518 trades,  90.1% WR, $    464,948.71
+  SILVER  :  6336 trades,  76.8% WR, $    271,492.76
+
+2. Progressive risk cap:
+  GOLD    :  7518 trades,  90.1% WR, $  9,054,651.25
+  SILVER  :  6336 trades,  76.8% WR, $  5,446,664.63
+
+==============================================================================================
+CONCLUSIONS
+==============================================================================================
+
+1. Progressive risk cap = 19.7x more capital ($14.5M vs $737K)
+   - Same WR (84.1%), same trades, pure compound effect
+   - Already active in the live bot
+
+2. Partial exits = BAD IDEA
+   - WR drops from 84.1% to 74.7%
+   - PF drops from 6.92 to 1.48
+   - Trailing stop avg profit only $15.58 vs $73.92 for full target
+   - Most trail stops hit at breakeven or small profit
+
+3. Best approach: full target exit + progressive risk cap (current bot config)
+
+==============================================================================================

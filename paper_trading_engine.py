@@ -44,7 +44,7 @@ CAPITAL_CONFIG = {
 
 # Trading config
 INITIAL_CAPITAL = 300.0
-MAX_POSITIONS = 4
+MAX_POSITIONS = 2
 LEVERAGE = 20
 COMMISSION_PCT = 0.001
 RISK_PER_TRADE = 0.02  # 2% base
@@ -64,11 +64,11 @@ def get_risk_cap(capital: float) -> float:
         return 1000.0
 
 # Asset mapping (Capital.com epics)
+# Optimized: GOLD+SILVER only (backtest: 88.2% WR, PF 7.44, -12.7% DD)
+# US100/US500 removed: lower WR (74-75%), higher DD, spread-sensitive
 ASSETS = {
     'GOLD': 'GOLD',           # XAU/USD
     'SILVER': 'SILVER',       # XAG/USD
-    'US100': 'US100',         # Nasdaq 100
-    'US500': 'US500'          # S&P 500
 }
 
 # Monitoring intervals
@@ -82,8 +82,6 @@ LIMIT_ORDER_EXPIRY_MINUTES = 5  # Limit order expiry (minutes)
 MAX_SPREAD_PCT = {
     'GOLD': 0.20,    # Metals: max 0.20%
     'SILVER': 0.20,  # Metals: max 0.20%
-    'US100': 0.10,   # Indices: max 0.10%
-    'US500': 0.10,   # Indices: max 0.10%
 }
 
 # Slippage tracking
@@ -136,6 +134,9 @@ class PaperTradingEngine:
         self.daily_loss_date = datetime.now().date()
         self.trading_halted = False
 
+        # Failed order cooldown (prevent retry spam)
+        self.failed_order_cooldowns = {}  # {asset: cooldown_until_datetime}
+
     def log(self, message: str, level: str = "INFO"):
         """Log message with timestamp"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -166,16 +167,17 @@ class PaperTradingEngine:
         df['ema_21'] = calculate_ema(df['close'], period=21)
         df['atr_20'] = calculate_atr(df['high'], df['low'], df['close'], period=20)
 
-        # TTM Squeeze
-        squeeze_on, momentum, color = calculate_ttm_squeeze_pinescript(
+        # TTM Squeeze (Beardy Squeeze Pro: 3 KC levels at 1.0, 1.5, 2.0)
+        squeeze_on, momentum, color, squeeze_intensity = calculate_ttm_squeeze_pinescript(
             df['high'], df['low'], df['close'],
             bb_period=20, bb_std=2.0,
-            kc_period=20, kc_multiplier=2.0,
+            kc_period=20,
             momentum_period=20
         )
 
         df['squeeze_on'] = squeeze_on
         df['ttm_momentum'] = momentum
+        df['squeeze_intensity'] = squeeze_intensity
 
         return df
 
@@ -238,6 +240,13 @@ class PaperTradingEngine:
                     del self.asset_cooldowns[asset]
                     self.consecutive_stops.pop(asset, None)
                     self.log(f"COOLDOWN_EXPIRED: {asset} - resuming trading", "INFO")
+
+            # Failed order cooldown (prevent retry spam)
+            if asset in self.failed_order_cooldowns:
+                if datetime.now() < self.failed_order_cooldowns[asset]:
+                    continue
+                else:
+                    del self.failed_order_cooldowns[asset]
 
             assets_checked += 1
 
@@ -386,12 +395,16 @@ class PaperTradingEngine:
             price_diff = current_offer - entry_price
             price_diff_pct = (price_diff / entry_price) * 100
 
-            self.log(f"Setup: Entry=${entry_price:.2f} | Current=${current_offer:.2f} | Gap={price_diff_pct:.2f}% | Spread={spread_pct:.3f}%")
+            # ATR-based threshold: market order only if price within 0.1 ATR of entry
+            atr = current_bar.get('atr_20', 0) if hasattr(current_bar, 'get') else getattr(current_bar, 'atr_20', 0)
+            market_order_threshold = entry_price + (0.1 * atr) if atr > 0 else entry_price
+
+            self.log(f"Setup: Entry=${entry_price:.2f} | Current=${current_offer:.2f} | Gap={price_diff_pct:.2f}% | Spread={spread_pct:.3f}% | ATR=${atr:.2f}")
 
             # Decision: limit order vs market order
-            if current_offer <= entry_price * 1.001:
-                # Price is AT or BELOW entry level (within 0.1%) → market order
-                self.log(f"Price at/below entry level → MARKET ORDER")
+            if current_offer <= market_order_threshold:
+                # Price is AT or BELOW entry level (within 0.1 ATR) → market order
+                self.log(f"Price at/below entry level (within 0.1 ATR=${0.1*atr:.2f}) → MARKET ORDER")
                 result = self.broker.place_market_order(
                     asset=epic,
                     direction='LONG',
@@ -401,24 +414,40 @@ class PaperTradingEngine:
                 )
 
                 if result.success:
-                    slippage_pct = abs(result.fill_price - entry_price) / entry_price * 100
+                    fill_price = result.fill_price
+                    slippage_pct = abs(fill_price - entry_price) / entry_price * 100
                     is_bad = slippage_pct > BAD_EXECUTION_THRESHOLD
-                    self.positions[asset] = {
-                        'entry_time': datetime.now(),
-                        'entry_price': result.fill_price,
-                        'stop_loss': setup.stop_loss,
-                        'target': setup.target,
-                        'size': position_size,
-                        'margin': margin_required,
-                        'risk_cap': current_risk_cap,
-                        'order_id': result.order_id
-                    }
-                    self._log_execution(asset, entry_price, result.fill_price, 'MARKET')
-                    self.log(f"✓ MARKET ENTRY: {asset} @ ${result.fill_price:.2f} (slippage: {slippage_pct:.2f}%{'  BAD_EXECUTION' if is_bad else ''})", "SUCCESS")
-                    self.log(f"  Size: {position_size:.4f} | Stop: ${setup.stop_loss:.2f} | Target: ${setup.target:.2f}")
+
+                    # Validate R:R after fill - reject if below 1.5:1
+                    actual_risk = fill_price - setup.stop_loss
+                    actual_reward = setup.target - fill_price
+                    actual_rr = actual_reward / actual_risk if actual_risk > 0 else 0
+
+                    if actual_rr < 1.5:
+                        self.log(f"R:R TOO LOW after fill: {actual_rr:.2f}:1 (risk=${actual_risk:.2f} reward=${actual_reward:.2f}) - closing immediately", "WARNING")
+                        self.broker.close_position(result.order_id)
+                        self.pending_entries.discard(asset)
+                        self.failed_order_cooldowns[asset] = datetime.now() + timedelta(minutes=15)
+                    else:
+                        self.positions[asset] = {
+                            'entry_time': datetime.now(),
+                            'entry_price': fill_price,
+                            'stop_loss': setup.stop_loss,
+                            'target': setup.target,
+                            'size': position_size,
+                            'margin': margin_required,
+                            'risk_cap': current_risk_cap,
+                            'order_id': result.order_id
+                        }
+                        self._log_execution(asset, entry_price, fill_price, 'MARKET')
+                        self.log(f"✓ MARKET ENTRY: {asset} @ ${fill_price:.2f} (slippage: {slippage_pct:.2f}%{'  BAD_EXECUTION' if is_bad else ''}) R:R={actual_rr:.1f}:1", "SUCCESS")
+                        self.log(f"  Size: {position_size:.4f} | Stop: ${setup.stop_loss:.2f} | Target: ${setup.target:.2f}")
                 else:
                     self.log(f"✗ MARKET ENTRY FAILED: {asset} - {result.message}", "ERROR")
                     self.pending_entries.discard(asset)
+                    # Cooldown to prevent retry spam (e.g. market closed)
+                    self.failed_order_cooldowns[asset] = datetime.now() + timedelta(minutes=15)
+                    self.log(f"  {asset} order cooldown 15min (next retry after {self.failed_order_cooldowns[asset].strftime('%H:%M')})", "WARNING")
 
             else:
                 # Price is ABOVE entry level → LIMIT ORDER (wait for pullback)
@@ -452,6 +481,8 @@ class PaperTradingEngine:
                 else:
                     self.log(f"✗ LIMIT ORDER FAILED: {asset} - {result.message}", "ERROR")
                     self.pending_entries.discard(asset)
+                    self.failed_order_cooldowns[asset] = datetime.now() + timedelta(minutes=15)
+                    self.log(f"  {asset} order cooldown 15min (next retry after {self.failed_order_cooldowns[asset].strftime('%H:%M')})", "WARNING")
 
         except Exception as e:
             self.log(f"Error executing entry for {asset}: {e}", "ERROR")

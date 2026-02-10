@@ -57,8 +57,9 @@ data/live/*
 !data/live/.gitkeep
 *.pkl
 *.pickle
-*.csv
 *.parquet
+# CSV files (except results/)
+data/**/*.csv
 
 # Logs
 logs/*.log
@@ -96,9 +97,12 @@ dmypy.json
 # TODO tracker data
 data/todos.json
 
-# Backtest results
-results/*.txt
+# Backtest result images
 data/backtest_results/*.png
 
 # Paper trading logs
+paper_trading.log
 /tmp/paper_trading_live.log
+
+# Databento data (large binary files)
+GLBX-*/

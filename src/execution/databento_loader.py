@@ -52,7 +52,10 @@ class DatabentoMicroFuturesLoader:
         if data_dir is None:
             # Default to the GLBX folder in project root
             project_root = Path(__file__).parent.parent.parent
+            # Try both folder names (with and without copy suffix)
             data_dir = project_root / "GLBX-20260201-B83UY6MA47"
+            if not data_dir.exists():
+                data_dir = project_root / "GLBX-20260201-B83UY6MA47 (1)"
 
         self.data_dir = Path(data_dir)
         self.dbn_file = None

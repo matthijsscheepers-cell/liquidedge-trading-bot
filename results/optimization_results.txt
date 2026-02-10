@@ -1,0 +1,109 @@
+==============================================================================================
+OPTIMIZATION GRID RESULTS
+==============================================================================================
+Date: 2026-02-10
+Period: 2010-09-12 to 2026-01-29 (~15.5 years)
+Initial Capital: $300
+Risk Cap: $50 (flat)
+Commission: 0.1% per side
+Stop Slippage: 0.1%
+Leverage: 20x
+
+Corrected backtest logic:
+  - No look-ahead bias (signal bar i-1, fill bar i)
+  - Slippage on stop-loss exits (stop-market orders)
+  - Commission on BOTH entry and exit
+  - Same-bar stop check (entry + stop on same bar = loss)
+
+==============================================================================================
+RESULTS SUMMARY
+==============================================================================================
+
+Config                          Trades      WR     PF      Capital    MaxDD     AvgW     AvgL
+----------------------------------------------------------------------------------------------
+Baseline -1.0 ATR                 5768   59.6%   1.73 $    148,494   -92.7% $   102 $    -87
+CB: -1.0 ATR                      4734   61.8%   1.94 $    147,119   -70.6% $   103 $    -86
+-0.75 ATR                         9292   68.1%   2.15 $    338,414   -76.3% $   100 $    -99
+CB: -0.75 ATR                     7193   71.5%   2.68 $    330,209   -60.8% $   102 $    -96
+-0.5 ATR                         17418   80.0%   3.33 $    794,691   -62.4% $    82 $    -98
+CB: -0.5 ATR                     13896   83.7%   4.53 $    761,442   -50.1% $    84 $    -95
+CB: -0.75 GOLD+SILVER             4618   77.0%   4.15 $    289,995   -27.3% $   107 $    -87
+CB: -1.0 GOLD+SILVER              2728   67.6%   2.88 $    139,262   -16.4% $   116 $    -84
+-0.5 GOLD+SILVER                 10425   86.8%   6.47 $    656,318   -18.4% $    86 $    -87
+CB: -0.5 GOLD+SILVER              9759   88.2%   7.44 $    643,030   -12.7% $    86 $    -86
+
+==============================================================================================
+PER-ASSET BREAKDOWN
+==============================================================================================
+
+Baseline -1.0 ATR:
+  GOLD    :   784 trades,  72.2% WR, $   46,557.13
+  SILVER  :  2171 trades,  63.7% WR, $   85,572.93
+  US100   :  1572 trades,  53.2% WR, $    2,024.08
+  US500   :  1241 trades,  52.5% WR, $   14,039.77
+
+CB: -1.0 ATR:
+  GOLD    :   666 trades,  77.8% WR, $   47,248.39
+  SILVER  :  1860 trades,  65.6% WR, $   81,672.75
+  US100   :  1217 trades,  53.7% WR, $    4,504.11
+  US500   :   991 trades,  53.8% WR, $   13,394.22
+
+-0.75 ATR:
+  GOLD    :  1775 trades,  83.9% WR, $  138,321.23
+  SILVER  :  3300 trades,  70.6% WR, $  158,104.44
+  US100   :  2257 trades,  60.8% WR, $   20,258.38
+  US500   :  1960 trades,  58.0% WR, $   21,429.80
+
+CB: -0.75 ATR:
+  GOLD    :  1474 trades,  87.1% WR, $  124,860.76
+  SILVER  :  2688 trades,  73.4% WR, $  146,221.23
+  US100   :  1589 trades,  62.6% WR, $   27,263.37
+  US500   :  1442 trades,  61.7% WR, $   31,563.44
+
+-0.5 ATR:
+  GOLD    :  4981 trades,  93.8% WR, $  383,054.19
+  SILVER  :  5444 trades,  80.4% WR, $  271,521.30
+  US100   :  3588 trades,  71.0% WR, $   70,293.03
+  US500   :  3405 trades,  68.5% WR, $   69,522.90
+
+CB: -0.5 ATR:
+  GOLD    :  4259 trades,  95.4% WR, $  342,626.58
+  SILVER  :  4499 trades,  83.0% WR, $  251,818.83
+  US100   :  2600 trades,  75.2% WR, $   82,992.96
+  US500   :  2538 trades,  74.0% WR, $   83,703.16
+
+CB: -0.75 GOLD+SILVER:
+  GOLD    :  1630 trades,  85.8% WR, $  134,667.91
+  SILVER  :  2988 trades,  72.2% WR, $  155,027.48
+
+CB: -1.0 GOLD+SILVER:
+  GOLD    :   720 trades,  75.0% WR, $   49,630.36
+  SILVER  :  2008 trades,  64.9% WR, $   89,332.05
+
+-0.5 GOLD+SILVER:
+  GOLD    :  4981 trades,  93.8% WR, $  384,276.81
+  SILVER  :  5444 trades,  80.4% WR, $  271,741.07
+
+CB: -0.5 GOLD+SILVER:
+  GOLD    :  4717 trades,  94.8% WR, $  374,192.24
+  SILVER  :  5042 trades,  81.9% WR, $  268,537.75
+
+==============================================================================================
+CONCLUSION
+==============================================================================================
+
+Best config: CB -0.5 ATR, GOLD+SILVER only
+  - 88.2% win rate, PF 7.44, -12.7% max drawdown
+  - Entry: -0.5 ATR, Stop: -1.5 ATR, Target: +1.5 ATR
+  - Risk: 1.0 ATR, Reward: 2.0 ATR (R:R = 2:1)
+  - Circuit breakers: 2 consecutive stops -> 4h cooldown, daily loss = 3x cap
+
+Key findings:
+  1. Shallower entry (-0.5 ATR) dramatically improves WR (60% -> 88%)
+  2. Circuit breakers reduce drawdown 20-30% with minimal capital impact
+  3. GOLD+SILVER only halves drawdown vs all 4 assets (-12.7% vs -50.1%)
+  4. US100/US500 have ~53% WR at -1.0 ATR, barely profitable after costs
+  5. Progressive risk cap compounds $300 to $14.5M (vs $643K flat cap)
+  6. Partial exits (trailing stops) hurt performance: WR drops to 75%, PF to 1.48
+
+==============================================================================================
