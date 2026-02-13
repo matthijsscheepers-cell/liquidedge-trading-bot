@@ -1,0 +1,46 @@
+==========================================================================================
+1-MINUTE EXECUTION BACKTEST — CAPITAL SENSITIVITY
+==========================================================================================
+
+Strategy: Entry -0.5 ATR | Stop -1.5 ATR | Target +1.5 ATR
+Period: 2010-09-12 to 2026-01-29
+Assets: GOLD, SILVER
+Circuit breakers: ON | Progressive risk cap: ON
+Total runtime: 77s
+
+Config              Start          Final    Return  Trades      WR     PF    MaxDD  FillRate        Blown
+---------------------------------------------------------------------------------------------------------
+$1K start      $    1,000 $            1    -99.9%     190   31.1%   0.20   -99.9%     13.8%   2014-11-25
+$5K start      $    5,000 $            1   -100.0%     242   31.8%   0.20  -100.0%     14.8%   2015-02-11
+$10K start     $   10,000 $            1   -100.0%     260   31.5%   0.20  -100.0%     14.5%   2015-03-13
+$25K start     $   25,000 $            1   -100.0%     321   35.8%   0.18  -100.0%     14.6%   2015-08-21
+
+
+PER-ASSET BREAKDOWN:
+
+$1K start:
+  GOLD    :   153 trades,  30.7% WR, $       -971.85
+  SILVER  :    37 trades,  32.4% WR, $        -27.17
+
+$5K start:
+  GOLD    :   194 trades,  32.0% WR, $     -4,862.47
+  SILVER  :    48 trades,  31.2% WR, $       -136.54
+
+$10K start:
+  GOLD    :   208 trades,  31.2% WR, $     -9,725.60
+  SILVER  :    52 trades,  32.7% WR, $       -273.42
+
+$25K start:
+  GOLD    :   260 trades,  35.8% WR, $    -23,997.53
+  SILVER  :    61 trades,  36.1% WR, $     -1,001.49
+
+
+EXECUTION DIAGNOSTICS:
+Config           Opened   Closed  ForcedSL  MaxOpen         AccountBlown
+--------------------------------------------------------------------------------
+$1K start           190      190         1        1  2014-11-25 16:45:00
+$5K start           242      242         1        2  2015-02-11 14:45:00
+$10K start          260      260         1        2  2015-03-13 14:15:00
+$25K start          321      321         1        2  2015-08-21 06:45:00
+
+==========================================================================================

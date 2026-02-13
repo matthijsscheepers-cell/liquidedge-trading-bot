@@ -1,27 +1,24 @@
 """
-Multi-Timeframe TTM Squeeze Pullback Strategy
+Multi-Timeframe EMA Pullback Strategy
 
-Gebruiker's eigen strategie:
-- 1H chart als anchor (trend confirmatie)
+Entry on pullback to 21-EMA in an uptrend:
+- 1H chart als anchor (trend confirmatie via Close > EMA(21))
 - 15min chart voor execution (timing entries)
-- Entry op pullback naar -0.5 ATR
-- Target op +1.5 ATR expansion
+- Entry at EMA(21) level (limit order)
+- Stop at EMA - 2.0 ATR
+- Target at EMA + 2.0 ATR
 
 Entry Criteria:
-    1. 1H TTM histogram: Bullish firing (positive momentum)
-    2. 15min Squeeze: Active (black/red/orange dots)
-    3. Price: Pullback to -0.5 ATR level
+    1. 1H Close > EMA(21) (bullish trend)
+    2. 15min histogram color != red (momentum not negative AND falling)
+    3. Price pulls back to EMA(21) level
+    4. NO squeeze requirement
 
-Entry Execution:
-    Entry: -0.5 ATR (below 21-EMA)
-    Stop: Below -1.5 ATR
-    Target: +1.5 ATR (above 21-EMA)
-    Direction: LONG ONLY
-
-Optimized parameters (backtest 2010-2026, GOLD+SILVER):
-    - 88.2% win rate, PF 7.44, max drawdown -12.7%
-    - Risk per trade: 1.0 ATR, Reward: 2.0 ATR (R:R = 2:1)
-    - Circuit breakers: 2 consecutive stops → 4h cooldown
+Optimized parameters (backtest 2020-2026, GOLD+US500, 1-min execution):
+    - GOLD: 89.0% win rate, PF 24.94 (Scale A), max drawdown -20.9%
+    - US500: 70.6% win rate, PF 6.35 (Scale A)
+    - Risk per trade: 2.0 ATR, Reward: 2.0 ATR (R:R = 1:1)
+    - Circuit breakers: 2 consecutive stops -> 4h cooldown
 """
 
 from typing import Optional, Dict, Any
@@ -36,35 +33,53 @@ from .base import (
 )
 
 
+def get_histogram_color(mom_curr, mom_prev):
+    """Determine TTM histogram bar color.
+
+    Colors:
+        light_blue: momentum > 0 AND rising
+        dark_blue:  momentum > 0 AND falling
+        yellow:     momentum <= 0 AND rising
+        red:        momentum <= 0 AND falling
+    """
+    if pd.isna(mom_curr) or pd.isna(mom_prev):
+        return 'red'
+    if mom_curr > 0 and mom_curr > mom_prev:
+        return 'light_blue'
+    elif mom_curr > 0:
+        return 'dark_blue'
+    elif mom_curr > mom_prev:
+        return 'yellow'
+    else:
+        return 'red'
+
+
 class TTMSqueezePullbackStrategy(BaseStrategy):
     """
-    Multi-timeframe TTM Squeeze pullback strategy.
+    Multi-timeframe EMA pullback strategy.
 
     Uses 1H chart for trend confirmation and 15min chart for execution.
-    Enters on pullback to -0.5 ATR, exits at +1.5 ATR target.
+    Enters on pullback to EMA(21), exits at +2.0 ATR target.
     """
 
     def _get_asset_params(self, asset: str) -> Dict[str, Any]:
         """
         Get asset-specific parameters.
 
-        All assets use same parameters for this strategy:
-        - 21-EMA basis for Keltner Channels
-        - ATR-based entry/stop/target levels
-        - No RRR calculation (fixed ATR levels)
+        All assets use same parameters:
+        - 21-EMA basis for entry level
+        - ATR-based stop/target levels
         """
-        # Universal parameters (same for all assets)
-        # Optimized via backtest grid (2010-2026): -0.5 ATR entry with CB
-        # GOLD+SILVER: 88.2% WR, PF 7.44, -12.7% max DD
+        # Optimized via 1-minute execution backtest (2020-2026, GOLD+US500)
+        # GOLD: 89.0% WR, PF 24.94 (Scale A), -20.9% max DD
+        # US500: 70.6% WR, PF 6.35 (Scale A)
         return {
-            'ema_period': 21,           # EMA basis for Keltner Channels
-            'atr_period': 20,           # ATR period (matches user's KC settings)
-            'entry_atr': -0.5,          # Entry at -0.5 ATR (shallow pullback)
+            'ema_period': 21,           # EMA basis
+            'atr_period': 20,           # ATR period
+            'entry_atr': 0.0,           # Entry at EMA(21) itself
             'entry_tolerance': 0.5,     # Accept entries within 0.5 ATR of target
-            'stop_atr': -1.5,           # Stop below -1.5 ATR (1.0 ATR risk)
-            'target_atr': 1.5,          # Target at +1.5 ATR (2.0 ATR reward)
-            'min_momentum_1h': 0.0,     # Minimum 1H momentum (positive = bullish)
-            'min_momentum_15m': 0.0,    # Minimum 15min momentum (positive = bullish)
+            'stop_atr': -2.0,           # Stop at EMA - 2.0 ATR
+            'target_atr': 2.0,          # Target at EMA + 2.0 ATR
         }
 
     def check_entry(self,
@@ -76,23 +91,13 @@ class TTMSqueezePullbackStrategy(BaseStrategy):
         Check for pullback entry setup.
 
         Multi-timeframe logic:
-        1. Align 1H and 15min data to current 15min bar
-        2. Check 1H histogram is bullish firing (trend confirmation)
-        3. Check 15min squeeze is active (compression)
-        4. Check price touches -0.5 ATR level (pullback entry)
-        5. Calculate entry/stop/target based on 21-EMA + ATR
+        1. Check 1H Close > EMA(21) (bullish trend)
+        2. Check 15min histogram color is NOT red (not negative AND falling)
+        3. Check price touches EMA(21) level (pullback entry)
+        4. Calculate entry/stop/target based on 21-EMA + ATR
 
-        Note: No 15min momentum requirement - pullbacks often show
-        temporary bearish momentum (red bars) which is expected behavior.
-
-        Args:
-            df_15min: 15-minute DataFrame with indicators
-            df_1h: 1-hour DataFrame with indicators
-            regime: Current market regime (not used)
-            confidence: Regime confidence (not used)
-
-        Returns:
-            TradeSetup if valid setup found, None otherwise
+        No squeeze requirement — removed after optimization showed
+        it filters out profitable trades without improving win rate.
         """
         # Get ATR column name based on period
         atr_col = f'atr_{self.params["atr_period"]}'
@@ -101,91 +106,66 @@ class TTMSqueezePullbackStrategy(BaseStrategy):
         self._validate_indicators_present(
             df_15min,
             ['open', 'high', 'low', 'close', 'ema_21', atr_col,
-             'ttm_momentum', 'squeeze_on']
+             'ttm_momentum']
         )
 
         # Validate 1H indicators
         self._validate_indicators_present(
             df_1h,
-            ['ttm_momentum']
+            ['close', 'ema_21']
         )
 
         # Need sufficient data
         if len(df_15min) < 50 or len(df_1h) < 20:
             return None
 
-        # Get current bars
+        # Get current and previous bars
         current_15m = df_15min.iloc[-1]
+        prev_15m = df_15min.iloc[-2]
         current_1h = df_1h.iloc[-1]
 
-        # Get previous momentum for direction detection
-        prev_15m = df_15min.iloc[-2]
-        prev_1h = df_1h.iloc[-2]
-
-        # === 1. CHECK 1H HISTOGRAM IS BULLISH FIRING ===
-        # Bullish = positive momentum AND increasing OR high enough
-        momentum_1h = current_1h['ttm_momentum']
-        prev_momentum_1h = prev_1h['ttm_momentum']
-
-        # Must be positive (bullish)
-        if momentum_1h <= self.params['min_momentum_1h']:
+        # === 1. CHECK 1H CLOSE > EMA(21) ===
+        close_1h = current_1h['close']
+        ema_1h = current_1h['ema_21']
+        if pd.isna(close_1h) or pd.isna(ema_1h) or close_1h <= ema_1h:
             return None
 
-        # Bullish firing = increasing OR staying strong
-        # Colors: dark blue (decreasing) -> yellow (flat) -> light blue (increasing)
-        # We want: yellow, light blue, or dark blue (all positive momentum)
-        is_bullish_1h = momentum_1h > 0
-
-        if not is_bullish_1h:
-            return None
-
-        # === 2. CHECK 15MIN SQUEEZE IS ACTIVE ===
-        # During a pullback, 15M momentum can be red/yellow (bearish/neutral)
-        # The 1H bullish provides trend confirmation
-        # No 15M momentum requirement - we want to catch the pullback LOW
-
-        # Get 15M momentum for metadata (not used as filter)
+        # === 2. CHECK 15MIN HISTOGRAM COLOR != RED ===
+        # Red = momentum <= 0 AND falling (worst case for entry)
         momentum_15m = current_15m['ttm_momentum']
+        prev_momentum_15m = prev_15m['ttm_momentum']
+        color = get_histogram_color(momentum_15m, prev_momentum_15m)
 
-        # Squeeze active = black/red/orange dots = squeeze_on = True
-        squeeze_active = current_15m['squeeze_on']
-
-        if not squeeze_active:
+        if color == 'red':
             return None
 
-        # === 3. CHECK PRICE NEAR -0.5 ATR LEVEL ===
+        # === 3. CHECK PRICE NEAR EMA LEVEL ===
         ema_21 = current_15m['ema_21']
         atr = current_15m[atr_col]
 
         # Calculate ATR levels
-        entry_target = ema_21 + (self.params['entry_atr'] * atr)  # -0.5 ATR target
-        tolerance = self.params['entry_tolerance'] * atr           # 0.5 ATR tolerance
+        entry_target = ema_21 + (self.params['entry_atr'] * atr)   # EMA itself (0.0 ATR)
+        tolerance = self.params['entry_tolerance'] * atr            # 0.5 ATR tolerance
 
-        stop_level = ema_21 + (self.params['stop_atr'] * atr)    # -1.5 ATR
-        target_level = ema_21 + (self.params['target_atr'] * atr) # +1.5 ATR
+        stop_level = ema_21 + (self.params['stop_atr'] * atr)     # EMA - 2.0 ATR
+        target_level = ema_21 + (self.params['target_atr'] * atr)  # EMA + 2.0 ATR
 
-        # Check if bar's low is within tolerance of -0.5 ATR level (pullback)
-        # Accept entries within ±0.5 ATR of the target level
+        # Check if bar's low is within tolerance of EMA level (pullback)
         bar_low = current_15m['low']
-        bar_high = current_15m['high']
 
         # Distance from bar's low to entry target (in ATR units)
         distance_from_target = (bar_low - entry_target) / atr
 
-        # Accept if within tolerance (e.g., within 0.5 ATR of -1 ATR target)
+        # Accept if within tolerance (within 0.5 ATR of EMA)
         if distance_from_target > tolerance:  # Didn't pull back enough
             return None
 
-        # But not be completely below (want to catch the pullback, not a crash)
+        # But not too far below (want pullback, not crash)
         if distance_from_target < -tolerance:  # Too far below
             return None
 
-        # Entry price is at the actual bar low (within tolerance range)
-        entry_level = entry_target  # Still enter at -0.5 ATR level for consistency
-
-        # === 4. CREATE TRADE SETUP ===
-        # Entry at -0.5 ATR level (limit order filled at pullback)
-        entry_price = entry_level
+        # Entry at EMA level
+        entry_price = entry_target
         stop_loss = stop_level
         target = target_level
 
@@ -207,10 +187,11 @@ class TTMSqueezePullbackStrategy(BaseStrategy):
                 'ema_21': ema_21,
                 'atr': atr,
                 'atr_period': self.params['atr_period'],
-                'momentum_1h': momentum_1h,
+                'close_1h': close_1h,
+                'ema_1h': ema_1h,
                 'momentum_15m': momentum_15m,
-                'squeeze_active': squeeze_active,
-                'entry_level': entry_level,
+                'histogram_color': color,
+                'entry_level': entry_target,
                 'regime': regime,
             }
         )
@@ -225,21 +206,11 @@ class TTMSqueezePullbackStrategy(BaseStrategy):
         1. Stop loss hit -> exit
         2. Target hit -> exit
         3. Hold otherwise
-
-        No trailing stops, no time exits - just stop and target.
-
-        Args:
-            df: DataFrame with current price data
-            position: Active position to manage
-
-        Returns:
-            Tuple of (ExitAction, new_value)
         """
         # Validate required data
         self._validate_indicators_present(df, ['close', 'high', 'low'])
 
         current = df.iloc[-1]
-        current_price = current['close']
 
         # LONG position management
         if position.direction == SignalDirection.LONG:

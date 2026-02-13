@@ -1,10 +1,12 @@
 """
-Paper Trading Engine - Live TTM Pullback Strategy
+Paper Trading Engine - Live EMA Pullback Strategy
 
 Uses Capital.com demo account for paper trading with:
 - Live market data (15min + 1H)
-- TTM Squeeze Pullback Strategy
-- Progressive Risk Cap position sizing
+- EMA Pullback Strategy (GOLD + SILVER + US500)
+- 1H trend filter: Close > EMA(21)
+- Asset-weighted risk: GOLD 2%, SILVER 1%, US500 1%
+- Scale A tiers (2% -> 1% -> 0.5%)
 - Real-time monitoring and alerts
 
 Usage:
@@ -44,31 +46,52 @@ CAPITAL_CONFIG = {
 
 # Trading config
 INITIAL_CAPITAL = 300.0
-MAX_POSITIONS = 2
+MAX_POSITIONS = 3  # One per asset
 LEVERAGE = 20
 COMMISSION_PCT = 0.001
-RISK_PER_TRADE = 0.02  # 2% base
 
-# Progressive Risk Cap
-def get_risk_cap(capital: float) -> float:
-    """Return progressive risk cap based on capital"""
-    if capital < 1000:
-        return 50.0
-    elif capital < 5000:
-        return 100.0
-    elif capital < 20000:
-        return 200.0
-    elif capital < 100000:
-        return 500.0
-    else:
-        return 1000.0
+# Scaling Risk % (Scale A)
+# 2% until $1M, 1% until $10M, 0.5% above $10M
+SCALING_TIERS = [
+    (1_000_000, 0.02),
+    (10_000_000, 0.01),
+    (float('inf'), 0.005),
+]
+
+def get_scaling_risk_pct(capital: float) -> float:
+    """Return risk percentage based on scaling tiers (uses GOLD's 2% base)"""
+    for threshold, pct in SCALING_TIERS:
+        if capital < threshold:
+            return pct
+    return SCALING_TIERS[-1][1]
+
+def get_asset_risk_pct(asset: str, capital: float) -> float:
+    """Return effective risk % for an asset, applying Scale A tiers.
+
+    Combines per-asset base risk with Scale A tier caps.
+    Example: SILVER base=1%, tier=2% → use 1%. tier=1% → use 1%. tier=0.5% → use 0.5%.
+    """
+    base_risk = ASSET_RISK.get(asset, 0.02)
+    tier_cap = get_scaling_risk_pct(capital)
+    return min(base_risk, tier_cap)
 
 # Asset mapping (Capital.com epics)
-# Optimized: GOLD+SILVER only (backtest: 88.2% WR, PF 7.44, -12.7% DD)
-# US100/US500 removed: lower WR (74-75%), higher DD, spread-sensitive
+# Close > EMA(21) filter, combined portfolio (2026-02-12):
+#   GOLD: 89.0% WR, PF 24.94 | SILVER: 80.0% WR, PF 6.33 | US500: 70.5% WR, PF 7.06
+#   Combined: 79.9% WR, -31.8% DD, $289B (backtest $3K start)
+# US100 removed: 59% WR, blown account
 ASSETS = {
     'GOLD': 'GOLD',           # XAU/USD
     'SILVER': 'SILVER',       # XAG/USD
+    'US500': 'US500',         # S&P 500
+}
+
+# Per-asset base risk percentages (before Scale A tiers)
+# GOLD at 2% (89% WR), SILVER/US500 at 1% (lower WR, higher DD at 2%)
+ASSET_RISK = {
+    'GOLD': 0.02,             # 2% risk per trade
+    'SILVER': 0.01,           # 1% risk per trade
+    'US500': 0.01,            # 1% risk per trade
 }
 
 # Monitoring intervals
@@ -82,6 +105,7 @@ LIMIT_ORDER_EXPIRY_MINUTES = 5  # Limit order expiry (minutes)
 MAX_SPREAD_PCT = {
     'GOLD': 0.20,    # Metals: max 0.20%
     'SILVER': 0.20,  # Metals: max 0.20%
+    'US500': 0.05,   # Indices: max 0.05%
 }
 
 # Slippage tracking
@@ -315,7 +339,7 @@ class PaperTradingEngine:
                                 'target': float(p.get('profitLevel', 0)) if p.get('profitLevel') else 0,
                                 'size': float(p.get('size', 0)),
                                 'margin': 0,
-                                'risk_cap': get_risk_cap(self.capital),
+                                'risk_pct': get_asset_risk_pct(asset_name, self.capital),
                                 'order_id': p.get('dealId', '')
                             }
                             self.log(f"Synced broker position: {asset_name} @ ${p.get('level', 0)}")
@@ -348,9 +372,9 @@ class PaperTradingEngine:
         self.pending_entries.add(asset)
 
         try:
-            # Calculate position size with progressive cap
-            current_risk_cap = get_risk_cap(self.capital)
-            risk_amount = min(self.capital * RISK_PER_TRADE, current_risk_cap)
+            # Calculate position size with per-asset risk %
+            current_risk_pct = get_asset_risk_pct(asset, self.capital)
+            risk_amount = self.capital * current_risk_pct
             stop_distance = setup.entry_price - setup.stop_loss
 
             if stop_distance <= 0:
@@ -436,7 +460,7 @@ class PaperTradingEngine:
                             'target': setup.target,
                             'size': position_size,
                             'margin': margin_required,
-                            'risk_cap': current_risk_cap,
+                            'risk_pct': current_risk_pct,
                             'order_id': result.order_id
                         }
                         self._log_execution(asset, entry_price, fill_price, 'MARKET')
@@ -518,7 +542,7 @@ class PaperTradingEngine:
                                 'target': order['target'],
                                 'size': order['size'],
                                 'margin': 0,
-                                'risk_cap': get_risk_cap(self.capital),
+                                'risk_pct': get_asset_risk_pct(asset, self.capital),
                                 'order_id': p.get('dealId', '')
                             }
                             self._log_execution(asset, order['entry_price'], fill_price, 'LIMIT')
@@ -590,8 +614,8 @@ class PaperTradingEngine:
                             self.asset_cooldowns[asset] = cooldown_until
                             self.log(f"COOLDOWN_ACTIVE: {asset} - {self.consecutive_stops[asset]} consecutive stops, paused until {cooldown_until.strftime('%H:%M')}", "WARNING")
 
-                        # Check daily loss limit
-                        daily_limit = get_risk_cap(self.capital) * DAILY_LOSS_MULTIPLIER
+                        # Check daily loss limit (based on GOLD risk = highest)
+                        daily_limit = (self.capital * get_asset_risk_pct('GOLD', self.capital)) * DAILY_LOSS_MULTIPLIER
                         if self.daily_losses >= daily_limit:
                             self.trading_halted = True
                             self.log(f"DAILY_LIMIT_REACHED: Losses ${self.daily_losses:.2f} >= limit ${daily_limit:.2f} - trading halted until tomorrow", "WARNING")
@@ -639,7 +663,10 @@ class PaperTradingEngine:
 
         print(f"Positions:   {len(self.positions)}/{MAX_POSITIONS}")
         print(f"Pending:     {len(self.pending_orders)} limit orders")
-        print(f"Risk Cap:    ${get_risk_cap(self.capital):.0f}")
+        print(f"Risk per trade:")
+        for asset_name in ASSETS:
+            rpct = get_asset_risk_pct(asset_name, self.capital)
+            print(f"  {asset_name}: {rpct*100:.1f}% (${self.capital * rpct:,.0f})")
         print()
 
         # Open positions
@@ -674,8 +701,8 @@ class PaperTradingEngine:
                 print(f"  {e['time'].strftime('%m-%d %H:%M')} {e['asset']} {e['order_type']}: {e['slippage_pct']:.3f}%{flag}")
             print()
 
-        # Circuit breaker status
-        daily_limit = get_risk_cap(self.capital) * DAILY_LOSS_MULTIPLIER
+        # Circuit breaker status (daily limit based on GOLD risk = highest)
+        daily_limit = (self.capital * get_asset_risk_pct('GOLD', self.capital)) * DAILY_LOSS_MULTIPLIER
         print("CIRCUIT BREAKERS:")
         print(f"  Daily losses: ${self.daily_losses:.2f} / ${daily_limit:.2f} limit {'HALTED' if self.trading_halted else 'OK'}")
         if self.asset_cooldowns:
@@ -703,6 +730,8 @@ class PaperTradingEngine:
         self.log("=" * 70)
         self.log(f"Initial Capital: ${INITIAL_CAPITAL:,.0f}")
         self.log(f"Assets: {', '.join(ASSETS.keys())}")
+        for a, r in ASSET_RISK.items():
+            self.log(f"  {a}: {r*100:.1f}% base risk")
         self.log(f"Environment: {CAPITAL_CONFIG['environment'].upper()}")
         self.log("")
 
